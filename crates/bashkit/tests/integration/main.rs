@@ -40,6 +40,7 @@ pub mod credential_injection_tests;
 pub mod curl_data_compat_tests;
 pub mod custom_builtins_tests;
 pub mod custom_fs_tests;
+pub mod shell_patch_tests;
 // Both assert named-IANA-zone behavior, which only exists with `tzdata`.
 // `date_timezone_no_tzdata_tests` covers the closed-to-UTC side.
 #[cfg(feature = "tzdata")]

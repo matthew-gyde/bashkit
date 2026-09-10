@@ -145,6 +145,27 @@ domain with real correctness stakes (timezones, compression, crypto, Unicode),
 gate it and give both sides of the gate tests. Do not reimplement it, and do not
 leave the gated-off configuration untested.
 
+## Gyde fork
+
+The `gyde/shell-fixes` branch starts at upstream
+`88caad974ed9ed72814b0e9185cbf283c55890ff` (Bashkit 0.17.1). It carries the
+interpreter, retry, command-discovery, and stat fixes previously embedded in
+agent-machine 0.3.1. Keeping this base preserves the released runtime behavior;
+moving to a newer upstream revision is a separate dependency upgrade.
+
+The fork keeps the upstream workspace and license intact. Consumers select an
+exact Git commit through Cargo rather than copying the crate into their source
+tree. No Bashkit registry publication is needed for this distribution path.
+
+`retry` executes in the existing interpreter with exact arguments and stdin,
+shared shell state and resource limits, bounded output and delays, and the last
+attempt's status. `command -v`/`-V` inspect every operand and honor redirections;
+`stat -c '%Y'` and `'%y'` format the filesystem's modification timestamp.
+These behaviors are covered by
+`crates/bashkit/tests/integration/shell_patch_tests.rs`, with native runtime and
+workspace-recovery coverage retained in agent-machine. See
+[Builtin Commands](../foundations/builtins.md) for dispatch ownership.
+
 ## See also
 
 * [Maintenance](maintenance.md) - Pre-release dependency and security maintenance requirements.

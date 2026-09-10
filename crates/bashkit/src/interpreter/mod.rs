@@ -16,6 +16,7 @@ mod expansion;
 mod glob;
 mod jobs;
 mod redirection;
+mod retry;
 mod state;
 mod time_command;
 
@@ -374,8 +375,8 @@ pub(crate) struct ShellRef<'a> {
 // only here. Listing every name guarantees inventory completeness regardless of
 // map membership.
 const SPECIAL_BUILTIN_NAMES: &[&str] = &[
-    ".", "bash", "command", "declare", "eval", "exec", "getopts", "let", "local", "sh", "source",
-    "typeset", "unset",
+    ".", "bash", "command", "declare", "eval", "exec", "getopts", "let", "local", "retry", "sh",
+    "source", "typeset", "unset",
 ];
 
 /// Sorted, deduped union of baked-in/custom builtins, interpreter-special
@@ -6543,6 +6544,7 @@ impl Interpreter {
             "source" | "." => Some(self.execute_source(args, redirects).await),
             "eval" => Some(self.execute_eval(args, stdin, redirects).await),
             "command" => Some(self.execute_command_builtin(args, stdin, redirects).await),
+            "retry" => Some(self.execute_retry(args, stdin, redirects).await),
             "declare" | "typeset" => Some(self.execute_declare_builtin(args, redirects).await),
             "let" => Some(self.execute_let_builtin(args, redirects).await),
             "unset" => Some(self.execute_unset_builtin(args, redirects).await),
@@ -8040,84 +8042,105 @@ impl Interpreter {
         redirects: &[Redirect],
     ) -> Result<ExecResult> {
         if args.is_empty() {
-            return Ok(ExecResult::ok(String::new()));
+            return self
+                .apply_redirections(ExecResult::default(), redirects)
+                .await;
         }
 
-        let mut mode = ' '; // default: run the command
+        let mut mode = ' ';
         let mut cmd_args_start = 0;
-
-        // Parse flags
-        let mut i = 0;
-        while i < args.len() {
-            let arg = &args[i];
-            if arg == "-v" {
-                mode = 'v';
-                i += 1;
-            } else if arg == "-V" {
-                mode = 'V';
-                i += 1;
-            } else if arg == "-p" {
-                // -p: use default PATH (ignore in sandboxed env)
-                i += 1;
-            } else {
-                cmd_args_start = i;
+        while cmd_args_start < args.len() {
+            let arg = &args[cmd_args_start];
+            if arg == "--" {
+                cmd_args_start += 1;
                 break;
             }
+            if arg == "-" || !arg.starts_with('-') {
+                break;
+            }
+            for flag in arg[1..].chars() {
+                match flag {
+                    'v' | 'V' => mode = flag,
+                    'p' => {} // The sandbox has no alternate ambient PATH.
+                    _ => {
+                        return self
+                            .apply_redirections(
+                                ExecResult::err(
+                                    format!("bash: command: {arg}: invalid option\n"),
+                                    2,
+                                ),
+                                redirects,
+                            )
+                            .await;
+                    }
+                }
+            }
+            cmd_args_start += 1;
         }
 
-        if cmd_args_start >= args.len() {
-            return Ok(ExecResult::ok(String::new()));
+        if cmd_args_start == args.len() {
+            return self
+                .apply_redirections(ExecResult::default(), redirects)
+                .await;
         }
-
-        let cmd_name = &args[cmd_args_start];
 
         match mode {
-            'v' => {
-                // command -v: print name/path if it's a known command
-                let output = if self.scoped.functions.contains_key(cmd_name.as_str())
-                    || self.builtins.contains_key(cmd_name.as_str())
-                    || self.has_host_builtin(cmd_name)
-                    || is_keyword(cmd_name)
-                {
-                    Some(cmd_name.to_string())
-                } else {
-                    self.resolve_command_path(cmd_name).await
-                };
-                let mut result = if let Some(name) = output {
-                    ExecResult::ok(format!("{}\n", name))
-                } else {
-                    ExecResult {
-                        stdout: crate::StreamData::new(),
-                        stderr: crate::StreamData::new(),
-                        exit_code: 1,
-                        control_flow: crate::interpreter::ControlFlow::None,
-                        ..Default::default()
+            'v' | 'V' => {
+                let mut result = ExecResult::with_code(String::new(), 1);
+                for cmd_name in &args[cmd_args_start..] {
+                    self.execution_budget.consume_work(1)?;
+                    let description =
+                        if let Some(alias) = self.scoped.aliases.get(cmd_name.as_str()) {
+                            let quoted = alias.replace('\'', "'\\''");
+                            Some(if mode == 'v' {
+                                format!("alias {cmd_name}='{quoted}'\n")
+                            } else {
+                                format!("{cmd_name} is aliased to `{alias}'\n")
+                            })
+                        } else if self.scoped.functions.contains_key(cmd_name.as_str()) {
+                            Some(if mode == 'v' {
+                                format!("{cmd_name}\n")
+                            } else {
+                                format!("{cmd_name} is a function\n")
+                            })
+                        } else if self.has_host_builtin(cmd_name)
+                            || self.builtins.contains_key(cmd_name.as_str())
+                            || Self::is_special_builtin_name(cmd_name)
+                        {
+                            Some(if mode == 'v' {
+                                format!("{cmd_name}\n")
+                            } else {
+                                format!("{cmd_name} is a shell builtin\n")
+                            })
+                        } else if is_keyword(cmd_name) {
+                            Some(if mode == 'v' {
+                                format!("{cmd_name}\n")
+                            } else {
+                                format!("{cmd_name} is a shell keyword\n")
+                            })
+                        } else {
+                            self.resolve_command_path(cmd_name).await.map(|path| {
+                                if mode == 'v' {
+                                    format!("{path}\n")
+                                } else {
+                                    format!("{cmd_name} is {path}\n")
+                                }
+                            })
+                        };
+                    if let Some(description) = description {
+                        self.execution_budget.consume_input(description.len())?;
+                        result.stdout_truncated |= result
+                            .stdout
+                            .append_capped(&description.into(), self.limits.max_stdout_bytes);
+                        result.exit_code = 0;
+                    } else if mode == 'V' {
+                        result.stderr_truncated |= result.stderr.append_capped(
+                            &format!("bash: command: {cmd_name}: not found\n").into(),
+                            self.limits.max_stderr_bytes,
+                        );
                     }
-                };
-                result = self.apply_redirections(result, redirects).await?;
-                Ok(result)
-            }
-            'V' => {
-                // command -V: verbose description
-                let description = if self.scoped.functions.contains_key(cmd_name.as_str()) {
-                    format!("{} is a function\n", cmd_name)
-                } else if self.has_host_builtin(cmd_name)
-                    || self.builtins.contains_key(cmd_name.as_str())
-                {
-                    format!("{} is a shell builtin\n", cmd_name)
-                } else if is_keyword(cmd_name) {
-                    format!("{} is a shell keyword\n", cmd_name)
-                } else if let Some(path) = self.resolve_command_path(cmd_name).await {
-                    format!("{} is {}\n", cmd_name, path)
-                } else {
-                    return Ok(ExecResult::err(
-                        format!("bash: command: {}: not found\n", cmd_name),
-                        1,
-                    ));
-                };
-                let mut result = ExecResult::ok(description);
-                result = self.apply_redirections(result, redirects).await?;
-                Ok(result)
+                }
+                self.apply_redirections(result, redirects).await
             }
             _ => {
                 // command name args...: run bypassing functions (use builtin only)
@@ -8170,10 +8193,24 @@ impl Interpreter {
                         )
                         .await;
                 }
-                Ok(ExecResult::err(
-                    format!("bash: {}: command not found\n", remaining[0]),
-                    127,
-                ))
+                if !self.shell_profile.is_logic_only() {
+                    if target.contains('/') {
+                        return self
+                            .try_execute_script_by_path(target, builtin_args, _stdin, redirects)
+                            .await;
+                    }
+                    if let Some(result) = self
+                        .try_execute_script_via_path_search(target, builtin_args, _stdin, redirects)
+                        .await?
+                    {
+                        return Ok(result);
+                    }
+                }
+                self.apply_redirections(
+                    ExecResult::err(format!("bash: {}: command not found\n", remaining[0]), 127),
+                    redirects,
+                )
+                .await
             }
         }
     }

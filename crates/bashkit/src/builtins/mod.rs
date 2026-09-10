@@ -84,7 +84,7 @@ mod path;
 mod pipeline;
 mod printf;
 mod read;
-mod retry;
+pub(crate) mod retry;
 mod rg;
 pub(crate) mod search_common;
 mod sed;

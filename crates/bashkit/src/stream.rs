@@ -47,6 +47,16 @@ impl StreamData {
             self.text.push_str(&other.text);
         }
     }
+    pub(crate) fn append_capped(&mut self, other: &Self, limit: usize) -> bool {
+        let remaining = limit.saturating_sub(self.len());
+        if other.len() <= remaining {
+            self.append(other);
+            false
+        } else {
+            self.append(&other.prefix(remaining));
+            true
+        }
+    }
     pub(crate) fn append_text(&mut self, text: &str) {
         self.append(&Self::from(text));
     }

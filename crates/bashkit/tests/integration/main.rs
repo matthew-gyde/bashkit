@@ -31,6 +31,7 @@ pub mod byte_range_panic_tests;
 pub mod byte_stream_tests;
 pub mod cancellation_tests;
 pub mod cmdsub_quote_test;
+pub mod command_discovery_tests;
 pub mod command_resolver_tests;
 pub mod competitor_regression_tests;
 pub mod compgen_tests;
@@ -40,6 +41,7 @@ pub mod credential_injection_tests;
 pub mod curl_data_compat_tests;
 pub mod custom_builtins_tests;
 pub mod custom_fs_tests;
+pub mod shell_patch_tests;
 // Both assert named-IANA-zone behavior, which only exists with `tzdata`.
 // `date_timezone_no_tzdata_tests` covers the closed-to-UTC side.
 #[cfg(feature = "tzdata")]

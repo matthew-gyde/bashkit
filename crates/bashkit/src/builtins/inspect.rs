@@ -245,6 +245,7 @@ fn determine_file_content_type(content: &[u8]) -> String {
 ///   %A   Human-readable permissions
 ///   %F   File type
 ///   %y   Last-modified timestamp (per VFS metadata, when available)
+///   %Y   Last-modified timestamp in seconds since the Unix epoch
 ///
 /// Argument surface is generated from uutils/coreutils' `uu_app()` via
 /// the `bashkit-coreutils-port` codegen tool — see
@@ -356,6 +357,16 @@ fn format_stat(name: &str, metadata: &crate::fs::Metadata, format: &str) -> Stri
                     'a' => result.push_str(&format!("{:o}", metadata.mode & 0o777)),
                     'A' => result.push_str(&format_permissions(metadata)),
                     'F' => result.push_str(&format_file_type(metadata.file_type)),
+                    'Y' => result.push_str(
+                        &crate::time_compat::to_chrono_utc(metadata.modified)
+                            .timestamp()
+                            .to_string(),
+                    ),
+                    'y' => result.push_str(
+                        &crate::time_compat::to_chrono_utc(metadata.modified)
+                            .format("%Y-%m-%d %H:%M:%S%.9f +0000")
+                            .to_string(),
+                    ),
                     '%' => result.push('%'),
                     _ => {
                         result.push('%');

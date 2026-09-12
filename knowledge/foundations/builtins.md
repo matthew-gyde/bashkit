@@ -192,6 +192,18 @@ Internal builtins that need interpreter state receive it via `Context.shell`:
 
 **Builtins using ShellRef:**
 - `type`, `which`, read-only: check builtin/function/keyword names
+- `help`, read-only: lists the same sorted registered, interpreter-special, and
+  mutable host registry inventory as `Bash::builtin_names()` and `compgen -b`.
+  Static descriptions enrich this inventory instead of defining it. Custom and
+  overridden commands expose their `llm_hint()` without command execution;
+  commands without detailed metadata remain discoverable with an explicit
+  fallback. JSON help escapes names and descriptions. Host removal is reflected
+  on the next query. `type` recognizes specials and host entries, and sends
+  missing-command diagnostics to stderr. Regression coverage lives in
+  `crates/bashkit/tests/integration/command_discovery_tests.rs`. The final
+  command-lookup failure also applies the command's redirections before
+  returning status 127, so missing-command diagnostics can be captured with
+  `2>file` or merged with `2>&1`, and output targets are created normally.
 - `alias`, `unalias`, direct mutation of `shell.aliases`
 - `trap`, direct mutation of `shell.traps`
 - `caller`, read call stack depth/frame names

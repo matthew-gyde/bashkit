@@ -23,11 +23,9 @@ myfunc is a function
 
 ### type_not_found
 ### exit_code:1
-### bash_diff: real bash writes error to stderr not stdout
 # type exits 1 for unknown command
 type nonexistent_cmd_xyz
 ### expect
-bash: type: nonexistent_cmd_xyz: not found
 ### end
 
 ### type_t_builtin

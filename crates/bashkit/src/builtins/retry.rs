@@ -1,7 +1,5 @@
-//! retry builtin - parse retry options and report planned behavior
-//!
-//! Non-standard builtin. Cannot actually re-execute commands in VFS,
-//! so parses options and prints what it would do.
+//! Retry argument parsing. Execution belongs to the interpreter so attempts
+//! share command dispatch, workspace state, and execution limits.
 
 use async_trait::async_trait;
 
@@ -10,7 +8,7 @@ use super::{Builtin, Context};
 use crate::error::Result;
 use crate::interpreter::ExecResult;
 
-/// Retry builtin - parses retry configuration and reports planned behavior.
+/// Retry builtin. The interpreter handles execution through its special dispatch.
 ///
 /// Usage: retry [OPTIONS] -- command [args...]
 ///
@@ -22,16 +20,16 @@ use crate::interpreter::ExecResult;
 ///   -v           Verbose mode (show detailed retry info)
 pub struct Retry;
 
-struct RetryConfig {
-    max_attempts: u32,
-    delay_secs: f64,
-    backoff: bool,
-    quiet: bool,
-    verbose: bool,
-    command: Vec<String>,
+pub(crate) struct RetryConfig {
+    pub max_attempts: u32,
+    pub delay_secs: f64,
+    pub backoff: bool,
+    pub quiet: bool,
+    pub verbose: bool,
+    pub command: Vec<String>,
 }
 
-fn parse_retry_args(args: &[String]) -> std::result::Result<RetryConfig, String> {
+pub(crate) fn parse_retry_args(args: &[String]) -> std::result::Result<RetryConfig, String> {
     let mut max_attempts: u32 = 3;
     let mut delay_secs: f64 = 1.0;
     let mut backoff = false;
@@ -56,8 +54,10 @@ fn parse_retry_args(args: &[String]) -> std::result::Result<RetryConfig, String>
             delay_secs = val
                 .parse()
                 .map_err(|_| format!("retry: invalid delay '{}'", val))?;
-            if delay_secs < 0.0 {
-                return Err("retry: delay must be non-negative".to_string());
+            if !delay_secs.is_finite()
+                || !(0.0..=super::limits::SLEEP_MAX_SECONDS).contains(&delay_secs)
+            {
+                return Err("retry: delay must be finite and between 0 and 60 seconds".to_string());
             }
         } else if p.flag("--backoff") {
             backoff = true;
@@ -73,6 +73,9 @@ fn parse_retry_args(args: &[String]) -> std::result::Result<RetryConfig, String>
     }
 
     let command: Vec<String> = p.rest().to_vec();
+    if command.is_empty() {
+        return Err("retry: missing command after --".to_string());
+    }
 
     Ok(RetryConfig {
         max_attempts,
@@ -94,146 +97,68 @@ impl Builtin for Retry {
             ));
         }
 
-        let config = match parse_retry_args(ctx.args) {
-            Ok(c) => c,
-            Err(e) => return Ok(ExecResult::err(format!("{e}\n"), 1)),
-        };
-
-        let mut output = String::new();
-
-        if !config.quiet {
-            output.push_str(&format!(
-                "retry: would retry {} time(s) with {:.1}s delay",
-                config.max_attempts, config.delay_secs,
-            ));
-            if config.backoff {
-                output.push_str(" (exponential backoff)");
-            }
-            output.push('\n');
-
-            if !config.command.is_empty() {
-                output.push_str(&format!("retry: command: {}\n", config.command.join(" ")));
-            }
-
-            if config.verbose {
-                for attempt in 1..=config.max_attempts {
-                    let delay = if config.backoff {
-                        config.delay_secs * 2.0_f64.powi((attempt as i32) - 1)
-                    } else {
-                        config.delay_secs
-                    };
-                    output.push_str(&format!(
-                        "retry: attempt {attempt}/{} delay {delay:.1}s\n",
-                        config.max_attempts,
-                    ));
-                }
-            }
-
-            output.push_str("retry: not supported in virtual environment\n");
+        if let Err(error) = parse_retry_args(ctx.args) {
+            return Ok(ExecResult::err(format!("{error}\n"), 1));
         }
-
-        Ok(ExecResult::ok(output))
+        Ok(ExecResult::err(
+            "retry: requires interpreter command dispatch\n",
+            1,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::Arc;
 
-    use crate::fs::InMemoryFs;
-
-    async fn run_retry(args: &[&str]) -> ExecResult {
-        let fs = Arc::new(InMemoryFs::new());
-        let mut variables = HashMap::new();
-        let env = HashMap::new();
-        let mut cwd = PathBuf::from("/");
-        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        let ctx = Context::new_for_test(&args, &env, &mut variables, &mut cwd, fs, None);
-        Retry.execute(ctx).await.unwrap()
+    fn parse(args: &[&str]) -> std::result::Result<RetryConfig, String> {
+        parse_retry_args(
+            &args
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>(),
+        )
     }
 
-    #[tokio::test]
-    async fn test_no_args() {
-        let result = run_retry(&[]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("usage"));
+    #[test]
+    fn accepts_bounded_attempts_delay_and_exact_command_arguments() {
+        let config = parse(&[
+            "-n",
+            "5",
+            "-d",
+            "0.05",
+            "--backoff",
+            "-q",
+            "-v",
+            "--",
+            "printf",
+            "%s",
+            "a b",
+        ])
+        .unwrap();
+        assert_eq!(config.max_attempts, 5);
+        assert_eq!(config.delay_secs, 0.05);
+        assert!(config.backoff && config.quiet && config.verbose);
+        assert_eq!(config.command, ["printf", "%s", "a b"]);
     }
 
-    #[tokio::test]
-    async fn test_defaults_with_separator() {
-        let result = run_retry(&["--", "echo", "hello"]).await;
-        assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("3 time(s)"));
-        assert!(result.stdout.contains("1.0s delay"));
-        assert!(result.stdout.contains("command: echo hello"));
-    }
-
-    #[tokio::test]
-    async fn test_custom_attempts_and_delay() {
-        let result = run_retry(&["-n", "5", "-d", "2.5", "--", "curl", "http://x"]).await;
-        assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("5 time(s)"));
-        assert!(result.stdout.contains("2.5s delay"));
-    }
-
-    #[tokio::test]
-    async fn test_backoff_flag() {
-        let result = run_retry(&["--backoff", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("exponential backoff"));
-    }
-
-    #[tokio::test]
-    async fn test_quiet_mode() {
-        let result = run_retry(&["-q", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_verbose_mode() {
-        let result = run_retry(&["-v", "-n", "3", "--backoff", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("attempt 1/3"));
-        assert!(result.stdout.contains("attempt 2/3"));
-        assert!(result.stdout.contains("attempt 3/3"));
-    }
-
-    #[tokio::test]
-    async fn test_invalid_n() {
-        let result = run_retry(&["-n", "abc", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("invalid number"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_n_arg() {
-        let result = run_retry(&["-n"]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("-n requires an argument"));
-    }
-
-    #[tokio::test]
-    async fn test_zero_attempts() {
-        let result = run_retry(&["-n", "0", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("must be at least 1"));
-    }
-
-    #[tokio::test]
-    async fn test_attempts_upper_bound() {
-        let result = run_retry(&["-n", "10001", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("must be at most 10000"));
-    }
-
-    #[tokio::test]
-    async fn test_unknown_option() {
-        let result = run_retry(&["--foo", "--", "cmd"]).await;
-        assert_eq!(result.exit_code, 1);
-        assert!(result.stderr.contains("unknown option"));
+    #[test]
+    fn rejects_missing_command_invalid_counts_and_non_finite_delays() {
+        for args in [
+            vec![],
+            vec!["--"],
+            vec!["-n"],
+            vec!["-n", "0", "--", "true"],
+            vec!["-n", "10001", "--", "true"],
+            vec!["-n", "abc", "--", "true"],
+            vec!["-d"],
+            vec!["-d", "-1", "--", "true"],
+            vec!["-d", "NaN", "--", "true"],
+            vec!["-d", "inf", "--", "true"],
+            vec!["-d", "61", "--", "true"],
+            vec!["--unknown", "--", "true"],
+        ] {
+            assert!(parse(&args).is_err(), "{}", args.join(" "));
+        }
     }
 }

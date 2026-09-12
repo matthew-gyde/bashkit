@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Allow the fork's pinned integration branches to be verified on demand.
+  workflow_dispatch:
   workflow_call:
 
 # CI executes repository code and has no consumer of checks-write permission.

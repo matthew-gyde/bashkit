@@ -157,7 +157,7 @@ let bash = Bash::builder()
 | Multi-component glob amplification (TM-DOS-095) | `/*/*/*/*` multiplies the candidate set at each component | Reject patterns deeper than `max_path_depth`; cap live candidates at `max_file_count` | FIXED |
 | Aggregate budget refresh (TM-DOS-096) | Nest/mix parsers, pipelines, traversal, runtimes, archives, and callbacks to restart local ceilings | One poisoned request-scoped `ExecutionBudget` meters aggregate work/input/live bytes without replacing subsystem caps | MITIGATED |
 | Contradictory execution-profile limits (TM-DOS-097) | Host config silently requests ineffective or impossible limits | Validate profile cross-field invariants before `BashBuilder` accepts it | MITIGATED |
-| Suspended host-call retention (TM-DOS-098) | Script repeats event-backed calls or host never resumes one | Capacity-one channel, normal execution limits, and handle-owned session released on drop | MITIGATED |
+| Suspended host-call retention (TM-DOS-098) | Script repeats event-backed calls or host never resumes one | Capacity-one channel; an independently driven execution future keeps the deadline armed while parked and drops the timed-out session without another host poll; handle drop aborts the driver | MITIGATED |
 | `time` report amplification (TM-DOS-099) | Attacker-controlled `-f` format expands repeatedly or targets the VFS with `-o` | Incremental rendering is capped by the stderr limit before emission or file replacement | MITIGATED |
 | jq control normalization amplification (TM-DOS-100) | Literal controls expand sixfold as `\u00XX` | Charge single-pass work and lease live bytes before allocation growth | MITIGATED |
 | yq structured-data amplification (TM-DOS-101) | Deep/multi-document YAML or JSON, runaway filters, expanded output | Parser depth and 4096-document caps, aggregate budgets, shared jaq work/deadline/output limits, final render cap | MITIGATED |
@@ -277,7 +277,7 @@ Scripts may attempt to leak sensitive information.
 
 | Threat | Attack Example | Mitigation | Status |
 |--------|---------------|------------|--------|
-| Fork-PR secret exfil (TM-INF-026) | Fork PR edits `examples/*.rs` or `build.rs` to read `$DOPPLER_TOKEN` / `$ANTHROPIC_API_KEY` from the runner env and exfiltrate; first-time-contributor approval gate runs the workflow from PR head, and `DOPPLER_TOKEN` is the master key to every other secret in the Doppler config | Three-layer fix in `.github/workflows/{ci,js,publish-js}.yml`: (1) fork-guard gates secret-using steps on `head.repo.fork != true`, (2) job-level secrets removed, each step sets only the tokens it needs, (3) `doppler run --only-secrets <KEY>` limits each invocation to the single secret the script reads. `ANTHROPIC_API_KEY` migrated off GH Actions secrets onto Doppler so `DOPPLER_TOKEN` is the only secret CI needs from GitHub | **FIXED** |
+| Fork-PR secret exfil (TM-INF-026) | Fork PR edits `examples/*.rs` or `build.rs` to read `$DOPPLER_TOKEN` / `$ANTHROPIC_API_KEY` from the runner env and exfiltrate; first-time-contributor approval gate runs the workflow from PR head, and `DOPPLER_TOKEN` is the master key to every other secret in the Doppler config | Trusted-run gates exclude PR execution from secret-backed examples. Dedicated fetch steps in `.github/workflows/{ci,js,publish-js}.yml` request one API key, mask it, and exit before build/example execution. Execution steps receive only that scoped key; Docker inherits it by name, without a secret value in argv. Neither the execution shell nor a live Doppler parent retains the broad service token. This protects process environments on a trusted runner; it does not sandbox dependencies persisting across steps. Workflow-script regression tests check child/parent environments. CI has contents-read permission only and does not persist checkout credentials; release examples install the reviewed lockfile without lifecycle scripts before linking the built artifact | **FIXED** |
 
 **Additional information-disclosure hardening:**
 
@@ -715,6 +715,7 @@ Both paths are tested so SQL cannot intentionally read host files.
 | Cross-database access (TM-SQL-009) | `ATTACH DATABASE '/tmp/x'` | `ATTACH`/`DETACH` rejected by policy | MITIGATED |
 | Dangerous PRAGMAs (TM-SQL-010) | `PRAGMA main."cache_size"=...` | Default `pragma_deny` list, including quoted/schema-qualified names | MITIGATED |
 | Host path errors (TM-SQL-011) | Upstream error includes `/rustc/...` | Sanitizer strips host path annotations | MITIGATED |
+| Unbounded work inside one engine step (TM-SQL-014) | `WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT count(*) FROM r` | VM progress handler charges the execution budget every 1024 instructions and interrupts on deadline/budget breach | MITIGATED |
 
 Black-box coverage drives `Bash::exec` through
 `tests/sqlite_integration_tests.rs` and `tests/sqlite_security_tests.rs`.
@@ -784,7 +785,7 @@ never the host `~/.ssh/`.
 | Session exhaustion (TM-SSH-003) | Open many concurrent sessions | Max concurrent sessions limit | MITIGATED |
 | OOM via large response (TM-SSH-004) | Server sends huge output | Streaming size limit | MITIGATED |
 | Connection hang (TM-SSH-005) | Server never responds | Configurable timeout | MITIGATED |
-| MITM via unverified host key (TM-SSH-006) | Attacker intercepts connection | Strict host key checking (default: on) | MITIGATED |
+| MITM via unverified host key (TM-SSH-006) | Attacker intercepts connection | Strict host key checking (default: on); CA-signed host certificates are always rejected in strict mode — configure the host's public key directly | MITIGATED |
 | Non-standard port access (TM-SSH-007) | Connect to services on unexpected ports | Port allowlist | MITIGATED |
 | Remote command injection (TM-SSH-008) | Inject via remote path in SCP | Shell-escape remote paths | MITIGATED |
 

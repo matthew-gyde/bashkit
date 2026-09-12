@@ -62,6 +62,7 @@ impl Builtin for Type {
         }
 
         let mut output = String::new();
+        let mut stderr = String::new();
         let mut all_found = true;
 
         for name in &names {
@@ -107,7 +108,7 @@ impl Builtin for Type {
                     }
                 }
                 if !found_any {
-                    output.push_str(&format!("bash: type: {}: not found\n", name));
+                    stderr.push_str(&format!("bash: type: {}: not found\n", name));
                     all_found = false;
                 }
             }
@@ -116,6 +117,7 @@ impl Builtin for Type {
         let exit_code = if all_found { 0 } else { 1 };
         Ok(ExecResult {
             stdout: output.into(),
+            stderr: super::cap_diagnostic(stderr, 1024).into(),
             exit_code,
             ..Default::default()
         })

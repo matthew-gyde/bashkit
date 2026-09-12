@@ -2,6 +2,8 @@
 //!
 //! Non-standard enhanced help that lists all available builtins,
 //! provides usage information, and supports search/filtering.
+//! Inventory comes from the live shell; static metadata only enriches commands
+//! that can actually dispatch. Host hints describe overrides and custom tools.
 
 use async_trait::async_trait;
 
@@ -22,6 +24,40 @@ use crate::interpreter::ExecResult;
 /// Without arguments, lists all builtin categories.
 /// With a command name, shows usage for that command.
 pub struct Help;
+
+#[derive(serde::Serialize)]
+struct HelpInfo {
+    name: String,
+    category: &'static str,
+    usage: String,
+    description: String,
+}
+
+fn command_info(ctx: &Context<'_>) -> Vec<HelpInfo> {
+    let names = ctx.shell.as_ref().map_or_else(
+        || BUILTINS.iter().map(|info| info.name.to_owned()).collect(),
+        |shell| shell.builtin_names(),
+    );
+    names
+        .into_iter()
+        .map(|name| {
+            let known = BUILTINS.iter().find(|info| info.name == name);
+            let hint = ctx
+                .shell
+                .as_ref()
+                .and_then(|shell| shell.builtin_hint(&name));
+            HelpInfo {
+                usage: known.map_or_else(|| name.clone(), |info| info.usage.to_owned()),
+                category: known.map_or("registered", |info| info.category),
+                description: hint
+                    .or_else(|| known.map(|info| info.description))
+                    .unwrap_or("Available builtin; detailed help is not provided")
+                    .to_owned(),
+                name,
+            }
+        })
+        .collect()
+}
 
 /// Builtin command metadata
 struct CmdInfo {
@@ -397,6 +433,7 @@ const BUILTINS: &[CmdInfo] = &[
 #[async_trait]
 impl Builtin for Help {
     async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        let commands = command_info(&ctx);
         let mut short = false;
         let mut list = false;
         let mut json = false;
@@ -426,12 +463,11 @@ impl Builtin for Help {
 
         // Specific command help
         if let Some(ref cmd) = command {
-            if let Some(info) = BUILTINS.iter().find(|b| b.name == cmd.as_str()) {
+            if let Some(info) = commands.iter().find(|b| b.name == cmd.as_str()) {
                 if json {
-                    return Ok(ExecResult::ok(format!(
-                        "{{\"name\":\"{}\",\"category\":\"{}\",\"usage\":\"{}\",\"description\":\"{}\"}}\n",
-                        info.name, info.category, info.usage, info.description
-                    )));
+                    let encoded =
+                        serde_json::to_string(info).expect("help metadata contains only strings");
+                    return Ok(ExecResult::ok(format!("{encoded}\n")));
                 }
                 if short {
                     return Ok(ExecResult::ok(format!(
@@ -450,7 +486,7 @@ impl Builtin for Help {
         // Search mode
         if let Some(ref term) = search {
             let term_lower = term.to_lowercase();
-            let matches: Vec<&CmdInfo> = BUILTINS
+            let matches: Vec<&HelpInfo> = commands
                 .iter()
                 .filter(|b| {
                     b.name.contains(&term_lower)
@@ -475,7 +511,7 @@ impl Builtin for Help {
         // List mode or default: show categories
         if list {
             let mut output = String::new();
-            for info in BUILTINS {
+            for info in &commands {
                 if short {
                     output.push_str(&format!("{}\n", info.name));
                 } else {
@@ -487,7 +523,7 @@ impl Builtin for Help {
 
         // Default: show categories with counts
         let mut categories: Vec<(&str, usize)> = Vec::new();
-        for info in BUILTINS {
+        for info in &commands {
             if let Some(entry) = categories.iter_mut().find(|(c, _)| *c == info.category) {
                 entry.1 += 1;
             } else {
@@ -499,7 +535,7 @@ impl Builtin for Help {
         for (cat, count) in &categories {
             output.push_str(&format!("  {:16} ({count} commands)\n", cat));
         }
-        output.push_str(&format!("\nTotal: {} builtins\n", BUILTINS.len()));
+        output.push_str(&format!("\nTotal: {} builtins\n", commands.len()));
         output.push_str("Use 'help <command>' for details, 'help --list' to list all.\n");
 
         Ok(ExecResult::ok(output))

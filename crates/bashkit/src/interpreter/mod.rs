@@ -401,9 +401,29 @@ impl ShellRef<'_> {
         self.limits
     }
 
-    /// Check if a name is a registered builtin command.
+    /// Use the same registered, special, and host command inventory as dispatch.
     pub(crate) fn has_builtin(&self, name: &str) -> bool {
         self.builtins.contains_key(name)
+            || SPECIAL_BUILTIN_NAMES.contains(&name)
+            || self
+                .host_builtins
+                .is_some_and(|registry| registry.lookup(name).is_some())
+    }
+
+    /// Help follows host override precedence without executing the command.
+    pub(crate) fn builtin_hint(&self, name: &str) -> Option<&'static str> {
+        if SPECIAL_BUILTIN_NAMES.contains(&name) {
+            return None;
+        }
+        if let Some(builtin) = self
+            .host_builtins
+            .and_then(|registry| registry.lookup(name))
+        {
+            return builtin.llm_hint();
+        }
+        self.builtins
+            .get(name)
+            .and_then(|builtin| builtin.llm_hint())
     }
 
     /// Sorted names of all dispatchable builtins (registered + special + host
@@ -6692,7 +6712,10 @@ impl Interpreter {
                 .chain(host_names.iter().map(|s| s.as_str()))
                 .collect();
             let msg = command_not_found_message(name, &known);
-            Ok(ExecResult::err(msg, 127))
+            // Lookup failure still belongs to this command's file descriptor
+            // table: redirects must capture its diagnostic and create targets.
+            self.apply_redirections(ExecResult::err(msg, 127), &command.redirects)
+                .await
         })
     }
 
@@ -10652,11 +10675,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_no_real_bash_escape() {
-        // Verify bash -c doesn't escape sandbox
-        // Try to run a command that would work in real bash but not here
-        let result = run_script("bash -c 'which bash 2>/dev/null || echo not found'").await;
-        // 'which' is not a builtin, so this should fail
-        assert!(result.stdout.contains("not found") || result.exit_code == 127);
+        // Introspection finds the virtual shell; an absolute host executable
+        // still cannot bypass the VFS execution boundary.
+        let found = run_script("bash -c 'which bash'").await;
+        assert_eq!(found.stdout, "bash\n");
+        assert_eq!(found.exit_code, 0);
+        let result = run_script("bash -c '/bin/bash -c \"echo escaped\"'").await;
+        assert_eq!(result.exit_code, 127);
+        assert!(result.stdout.is_empty());
     }
 
     #[tokio::test]

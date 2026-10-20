@@ -249,7 +249,8 @@ fn determine_file_content_type(content: &[u8]) -> String {
 ///   %a   Octal permissions
 ///   %A   Human-readable permissions
 ///   %F   File type
-///   %y   Last-modified timestamp (per VFS metadata, when available)
+///   %y   Modification time, human-readable, in the sandbox `TZ`
+///   %Y   Modification time, seconds since the epoch
 ///
 /// Argument surface is generated from uutils/coreutils' `uu_app()` via
 /// the `bashkit-coreutils-port` codegen tool — see
@@ -349,7 +350,27 @@ impl Builtin for Stat {
                 } else {
                     None
                 };
-                output.push_str(&format_stat(file, &metadata, fmt, target.as_deref()));
+                // %y reads the sandbox TZ like `date`; resolve it only when asked.
+                let modified = if fmt.contains("%y") {
+                    match super::date::format_file_time(ctx.env.get("TZ"), metadata.modified) {
+                        Ok(time) => Some(time),
+                        Err(e) => {
+                            return Ok(ExecResult::err(
+                                format!("{}\n", e.replacen("date:", "stat:", 1)),
+                                1,
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                output.push_str(&format_stat(
+                    file,
+                    &metadata,
+                    fmt,
+                    target.as_deref(),
+                    modified.as_deref(),
+                ));
                 output.push('\n');
             } else {
                 output.push_str(&default_stat_format(file, &metadata));
@@ -366,6 +387,7 @@ fn format_stat(
     metadata: &crate::fs::Metadata,
     format: &str,
     link_target: Option<&str>,
+    modified: Option<&str>,
 ) -> String {
     let mut result = String::new();
     let mut chars = format.chars().peekable();
@@ -388,6 +410,8 @@ fn format_stat(
                     'a' => result.push_str(&format!("{:o}", metadata.mode & 0o777)),
                     'A' => result.push_str(&format_permissions(metadata)),
                     'F' => result.push_str(&format_file_type(metadata.file_type)),
+                    // Modification time, human-readable (computed by the caller).
+                    'y' => result.push_str(modified.unwrap_or_default()),
                     // Modification time, seconds since the epoch.
                     'Y' => result.push_str(
                         &metadata

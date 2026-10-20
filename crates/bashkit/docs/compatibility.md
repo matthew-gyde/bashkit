@@ -112,7 +112,7 @@ for sandbox security reasons. See the compliance spec for details.
 | `watch` | `INTERVAL COMMAND` | Execute periodically (virtual mode) |
 | `file` | (none) | Detect file type via magic bytes |
 | `less` | (none) | View file (behaves like cat in virtual mode) |
-| `stat` | `-c FORMAT` | Display file metadata |
+| `stat` | `-c FORMAT` (`%n %N %s %a %A %F %y %Y`) | Display file metadata; `%y` is in the sandbox `TZ` like `date` |
 | `tar` | `-c`, `-x`, `-t`, `-v`, `-f`, `-z`/`--gzip`, `-j`/`--bzip2`, `-C`, `-O`, `-P`/`--absolute-names`, `-T`/`--files-from`, `--strip-components`, `--exclude`, `--` | Archive operations; auto-detects gzip/bzip2 while reading |
 | `gzip` | `-d`, `-k`, `-f` | Compress files |
 | `gunzip` | `-k`, `-f` | Decompress files |

@@ -298,3 +298,17 @@ async fn weekday_midnight_observes_dst_rules() {
     assert_eq!(result.exit_code, 1);
     assert!(result.stdout.is_empty());
 }
+
+#[tokio::test]
+async fn stat_modification_time_uses_sandbox_timezone() {
+    let result = fixed_date(
+        Some("America/New_York"),
+        "touch -d '2024-07-02 03:04:05' /tmp/stamp; stat -c '%y|%Y' /tmp/stamp",
+    )
+    .await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert_eq!(
+        result.stdout,
+        "2024-07-02 03:04:05.000000000 -0400|1719903845\n"
+    );
+}

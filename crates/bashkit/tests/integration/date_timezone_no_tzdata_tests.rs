@@ -147,3 +147,16 @@ async fn weekdays_work_in_utc_without_tzdata() {
     assert!(result.stdout.is_empty());
     assert!(result.stderr.contains(UNAVAILABLE));
 }
+
+#[tokio::test]
+async fn stat_modification_time_refuses_a_named_zone() {
+    let result = fixed_date(
+        Some("America/Chicago"),
+        "touch /tmp/stamp; stat -c '%y' /tmp/stamp",
+    )
+    .await;
+    assert_eq!(result.exit_code, 1);
+    assert!(result.stderr.starts_with("stat: "), "{:?}", result.stderr);
+    assert!(result.stderr.contains(UNAVAILABLE), "{:?}", result.stderr);
+    assert!(result.stdout.is_empty(), "stdout was {:?}", result.stdout);
+}

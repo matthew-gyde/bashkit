@@ -85,3 +85,11 @@ stat -c '%N' stn stl
 'stn'
 'stl' -> 'stn'
 ### end
+
+### stat_modification_time_formats
+# %y is the modification time with nanoseconds and offset, %Y the epoch seconds
+cd /tmp && touch -d '2024-01-02 03:04:05' st_mtime
+stat -c '%y|%Y' st_mtime
+### expect
+2024-01-02 03:04:05.000000000 +0000|1704164645
+### end

@@ -264,6 +264,18 @@ impl Date {
     }
 }
 
+/// A file timestamp as GNU `stat -c %y` prints it: wall time in the sandbox
+/// `TZ` with nanoseconds and the numeric offset (`2026-01-02 03:04:05.000000000
+/// +0000`). Shared with `stat` so file times follow `date`'s timezone policy.
+pub(crate) fn format_file_time(
+    tz: Option<&String>,
+    time: crate::time_compat::SystemTime,
+) -> std::result::Result<String, String> {
+    let timezone = SandboxTimezone::from_env(tz)?;
+    let dt = crate::time_compat::to_chrono_utc(time);
+    Ok(timezone.format(&dt, "%Y-%m-%d %H:%M:%S%.9f %z"))
+}
+
 /// Validate a strftime format string.
 /// Returns Ok(()) if valid, or an error message describing the issue.
 ///

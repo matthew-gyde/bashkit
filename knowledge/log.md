@@ -150,6 +150,8 @@
 * **Streaming documentation**: Reworked the public streaming guide as product documentation: present-tense API behavior, runnable language examples, explicit capture defaults, errors/cancellation and a user-facing runtime support matrix. Removed draft/release-gate language; retained detailed runtime/test evidence in the streaming engineering notes. Aligned the packaged Rustdoc guide and page metadata. See [Streaming Handler Roadmap](foundations/streaming-roadmap.md).
 ## 2026-10-20
 
+* **help lists the live inventory**: `help` read only its static table, so commands registered with `BashBuilder::builtin` or the host registry were unknown to it, and `--json` was built with `format!` and broke on a quote. It now lists `Bash::builtin_names()`, describes an embedder's command by its `llm_hint`, and serializes JSON. See [Builtin Commands](foundations/builtins.md).
+
 * **stat %y**: `stat -c %y` printed `%y` although the format was documented. It now prints the modification time with nanoseconds and the numeric offset, in the sandbox `TZ` through the same timezone policy as `date`. See [Builtin Commands](foundations/builtins.md).
 
 * **command -V and option parsing**: `command -V` described only its first operand. It now describes every operand, reports each missing one on stderr and fails only when none was found. Flags combine (`-pv`) and an unknown flag is an invalid option with status 2, as in bash. See [Builtin Commands](foundations/builtins.md).

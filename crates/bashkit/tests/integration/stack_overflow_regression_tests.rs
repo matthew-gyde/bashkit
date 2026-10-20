@@ -227,3 +227,27 @@ async fn nested_compounds_inside_recursion_do_not_overflow() {
         .unwrap();
     assert!(r.stdout.contains("rc="), "stdout: {}", r.stdout);
 }
+/// THREAT[TM-DOS-020]: builtins that run a command (`timeout`, `env`,
+/// `retry`) re-enter the interpreter, so a long enough chain of them
+/// overflowed the process stack. Each now counts against the function depth.
+#[tokio::test]
+async fn nested_command_running_builtins_are_bounded() {
+    for prefix in ["timeout 5 ", "env ", "retry -n 1 -d 0 -- "] {
+        let mut bash = Bash::builder()
+            .limits(ExecutionLimits::new().max_function_depth(8))
+            .build();
+        let script = format!("{}echo deep; echo rc=$?", prefix.repeat(200));
+        let r = bash.exec(&script).await.unwrap();
+        assert_eq!(r.stdout, "rc=2\n", "{prefix}");
+        assert!(
+            r.stderr.contains("maximum nesting depth exceeded"),
+            "{prefix}: {}",
+            r.stderr
+        );
+        let r = bash
+            .exec(&format!("{}echo shallow", prefix.repeat(8)))
+            .await
+            .unwrap();
+        assert_eq!(r.stdout, "shallow\n", "{prefix}");
+    }
+}

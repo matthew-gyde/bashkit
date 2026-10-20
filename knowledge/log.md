@@ -148,6 +148,9 @@
 * **Streaming command I/O**: Added public byte readers/writers with separate command status and explicit async sink/bounded capture execution. Final streaming filters and live commands bypass whole-input dispatch; redirects preserve write/duplication order. Request lifetime includes sink completion, deadlines, cancellation and revoked handles. Native Rust/Python/JS, JS/WASM and C output callbacks have runtime tests; CLI uses the new output driver. Public usage/migration docs and a per-surface test matrix identify remaining buffered substitutions, legacy tools/Terminal and unverified runtimes. See [Streaming Handler Roadmap](foundations/streaming-roadmap.md).
 
 * **Streaming documentation**: Reworked the public streaming guide as product documentation: present-tense API behavior, runnable language examples, explicit capture defaults, errors/cancellation and a user-facing runtime support matrix. Removed draft/release-gate language; retained detailed runtime/test evidence in the streaming engineering notes. Aligned the packaged Rustdoc guide and page metadata. See [Streaming Handler Roadmap](foundations/streaming-roadmap.md).
+## 2026-10-20
+
+* **retry runs its command**: `retry` parsed its options, printed what it would do and exited 0 without running anything. It now runs the command as an execution-plan driver until it succeeds or the attempts run out, returning the last attempt's status, with its diagnostics on stderr. Every fulfilled builtin plan now counts one level against the shared function depth, which also stops `timeout`/`env` chains from overflowing the host stack. See [Builtin Commands](foundations/builtins.md).
 
 ## 2026-10-15
 

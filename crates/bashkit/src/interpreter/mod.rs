@@ -9939,8 +9939,21 @@ impl Interpreter {
 
                 match plan_result {
                     Ok(Ok(Some(plan))) => {
-                        let result = self.execute_builtin_plan(plan, redirects).await?;
-                        return self.apply_after_tool(name, result);
+                        // THREAT[TM-DOS-020]: a plan's commands re-enter the
+                        // interpreter, so nested plans (`timeout 5 timeout 5
+                        // ...`, `retry -- retry -- ...`) share the function
+                        // depth limit instead of overflowing the host stack.
+                        if self.counters.push_function(&self.limits).is_err() {
+                            let result = ExecResult::err(
+                                self.diag(format!("{name}: maximum nesting depth exceeded\n")),
+                                2,
+                            );
+                            let result = self.apply_redirections(result, redirects).await?;
+                            return self.apply_after_tool(name, result);
+                        }
+                        let result = self.execute_builtin_plan(plan, redirects).await;
+                        self.counters.pop_function();
+                        return self.apply_after_tool(name, result?);
                     }
                     Ok(Ok(None)) => { /* fall through to normal execute() */ }
                     Ok(Err(e)) => return Err(e),

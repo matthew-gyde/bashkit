@@ -139,6 +139,7 @@ pub mod redirect_error_tests;
 pub mod regex_limit_tests;
 pub mod release_profile_tests;
 pub mod request_lifecycle_contract_tests;
+pub mod retry_tests;
 pub mod runtime_env_tests;
 pub mod script_analysis;
 pub mod script_execution_tests;

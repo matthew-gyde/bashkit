@@ -1,5 +1,9 @@
 # Bashkit Knowledge Update Log
 
+## 2026-10-20
+
+* **retry runs its command**: `retry` parsed its options, printed what it would do and exited 0 without running anything. It now runs the command as an execution-plan driver until it succeeds or the attempts run out, returning the last attempt's status, with its diagnostics on stderr. Every fulfilled builtin plan now counts one level against the shared function depth, which also stops `timeout`/`env` chains from overflowing the host stack. See [Builtin Commands](foundations/builtins.md).
+
 ## 2026-10-15
 
 * **Release metadata**: Homebrew's generated formula uses the workspace MIT license and the required human commit identity. Regression coverage checks both before the automated tap push. See [Release Process](operations/release-process.md).

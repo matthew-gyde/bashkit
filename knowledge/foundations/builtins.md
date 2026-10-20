@@ -421,7 +421,22 @@ environment. `xargs --process-slot-var=VAR` uses this to expose a
 per-invocation parallel-slot index.
 
 **Current users:** `timeout` → Timeout, `xargs` → Batch, `find -exec` /
-`-execdir` → Driver, `env CMD` → Env.
+`-execdir` → Driver, `env CMD` → Env, `retry` → Driver.
+
+A plan's commands re-enter the interpreter, so every fulfilled plan counts one
+level against the shared function depth (TM-DOS-020) while it runs. Chains such
+as `timeout 5 env retry -- ...` stop with `NAME: maximum nesting depth
+exceeded` (status 2) instead of overflowing the host stack.
+
+`retry` runs its command once per attempt through `PlanStep::Run`, so the
+command is an ordinary command of the same shell: functions see and change
+shell state, and every attempt counts against the execution limits. The status
+is the last attempt's; a `break`/`continue`/`return`/`exit` ends the retries.
+Its own lines (`retry: attempt N/M failed (S); retrying in Ds`, and with `-v`
+`retry: attempt N/M`) go to stderr through `PlanStep::Emit`, so a streaming
+caller sees them in order. Captured output keeps each stream in order; under
+`2>&1` the driver's lines follow the command output, as `find`'s do. Each wait
+is capped at 60 seconds like `sleep` and never outlasts the execution deadline.
 
 `find` (`builtins/find/`) parses GNU's full expression grammar into a tree
 and evaluates it in a resumable walker. `-exec ... \;` suspends evaluation,

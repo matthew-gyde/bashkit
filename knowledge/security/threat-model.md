@@ -237,7 +237,7 @@ runaway scripts without permanently breaking the session.
 
 | ID | Threat | Attack Vector | Mitigation | Status |
 |----|--------|--------------|------------|--------|
-| TM-DOS-020 | Function and signal-trap recursion | `f() { f; }; f` or `trap 'kill -USR1 $$' USR1; kill -USR1 $$` | Signal handlers, functions, source, and child shells share the function-depth counter, plus a dedicated trap-nesting cap of 3 that trips first on small stacks; direct, mutual, and mixed signal recursion cannot refresh either. Nested-trap exhaustion is skipped with a diagnostic and the first trip fails the exec as a resource-limit error, while handler logic failures never disturb the interrupted command (TM-DOS-030). Effective depth limit is at most 16 even if an embedder requests more; the previous default 100 and hardened 64 could overflow a 2 MiB host stack before the counter fired (#2459). CLI subprocess tests run direct, mutual, and mixed signal/function/source recursion on that stack size with small command budgets. | **MITIGATED** |
+| TM-DOS-020 | Function and signal-trap recursion | `f() { f; }; f` or `trap 'kill -USR1 $$' USR1; kill -USR1 $$` | Signal handlers, functions, source, child shells, and builtins that run a command through an execution plan (`timeout`, `env`, `xargs`, `find -exec`, `retry`) share the function-depth counter, plus a dedicated trap-nesting cap of 3 that trips first on small stacks; direct, mutual, and mixed signal recursion cannot refresh either. Nested-trap exhaustion is skipped with a diagnostic and the first trip fails the exec as a resource-limit error, while handler logic failures never disturb the interrupted command (TM-DOS-030). Effective depth limit is at most 16 even if an embedder requests more; the previous default 100 and hardened 64 could overflow a 2 MiB host stack before the counter fired (#2459). CLI subprocess tests run direct, mutual, and mixed signal/function/source recursion on that stack size with small command budgets. | **MITIGATED** |
 | TM-DOS-021 | Command sub nesting | `$($($($())))` | Child parsers increment shared AST depth and inherit ceiling, fuel, budget and timeout origin; heap ownership and outlined nonrecursive frames keep the hard cap stack-safe | **MITIGATED** |
 | TM-DOS-022 | Parser recursion | Deeply nested `(((())))` | `max_ast_depth` limit (100) + `HARD_MAX_AST_DEPTH` cap (100) | **MITIGATED** |
 | TM-DOS-026 | Arithmetic recursion and expansion amplification | `$((((...))))`, `a=a+a; $((a))`, `i=arr[i]; $((arr[i]))`, nested `${a[${a[...]}]}` passed to `let` | `MAX_ARITHMETIC_DEPTH` limit (50) checked before dollar expansion and tokenization; shared fuel across textual expansion, nested read-only subscripts, nameref/key lookup, and recursive variable evaluation; generated expression/key bytes capped at 64 KiB before append; `BudgetedString` leases capacity and temporary value copies before allocation; appends charge shared work and check cancellation/deadline; command boundaries propagate poisoned shared budgets as resource-limit errors. Regressions: `arithmetic_resource_tests`, `arithmetic_text_cap_and_cancellation_precede_growth` | **MITIGATED** |
@@ -1251,7 +1251,6 @@ command count, timeout, `catch_unwind`).
 | `fc` | History listing | Lists virtual session history; no re-execution in VFS environment |
 | `log` | Structured logging output | Formats message to stdout; reads `LOG_LEVEL`/`LOG_FORMAT` from env (caller-controlled) |
 | `parallel` | GNU parallel stub (dry-run only) | Reports planned commands; does not actually execute them in VFS |
-| `retry` | Retry stub (dry-run only) | Reports planned retry config; does not actually re-execute in VFS |
 | `inspect` (`less`, `file`, `stat`) | File inspection | Reads VFS files; bounded by `max_file_size`; `less` acts as `cat` |
 
 #### 10.2 VFS-Bounded Builtins (Covered by FS Limits)
@@ -1286,6 +1285,7 @@ filesystem limits (`max_file_size`, `max_file_count`, `max_total_bytes`).
 | `dotenv` | TM-INJ-018 | Internal variable prefix injection |
 | `envsubst` | TM-INF-019 | Env var exposure via substitution (caller risk) |
 | `timeout` | (covered by existing limits) | Caps timeout at 300s (`MAX_TIMEOUT_SECONDS`); within execution timeout (TM-DOS-023) |
+| `retry` | TM-DOS-020, TM-DOS-023 | Each attempt is an ordinary command under the command, loop and timeout limits; at most 10,000 attempts; each wait is at most 60s and never outlasts the execution deadline; collected output stops at the stdout/stderr limits; nested plans share the function depth |
 
 ---
 

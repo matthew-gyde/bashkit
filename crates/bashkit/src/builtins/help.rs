@@ -2,6 +2,17 @@
 //!
 //! Non-standard enhanced help that lists all available builtins,
 //! provides usage information, and supports search/filtering.
+//!
+//! Decisions:
+//! - The inventory is the live one (`Bash::builtin_names()`), so help lists
+//!   exactly what can run: host-registry and `BashBuilder::builtin` commands
+//!   appear, and commands a `builtin_filter` removed do not. The static table
+//!   below only describes; it never decides what exists.
+//! - An embedder's command is described by its own `llm_hint`, including one
+//!   that replaces a bundled builtin of the same name, whose table entry no
+//!   longer describes what runs. Bundled builtins keep their table entry;
+//!   one without an entry falls back to its hint.
+//! - `--json` output is serialized, so names and hints are always escaped.
 
 use async_trait::async_trait;
 
@@ -22,6 +33,53 @@ use crate::interpreter::ExecResult;
 /// Without arguments, lists all builtin categories.
 /// With a command name, shows usage for that command.
 pub struct Help;
+
+/// One command as help shows it.
+#[derive(serde::Serialize)]
+struct HelpEntry {
+    name: String,
+    category: &'static str,
+    usage: String,
+    description: String,
+}
+
+impl HelpEntry {
+    fn from_table(info: &CmdInfo) -> Self {
+        Self {
+            name: info.name.to_string(),
+            category: info.category,
+            usage: info.usage.to_string(),
+            description: info.description.to_string(),
+        }
+    }
+}
+
+/// Every command that can run, described. Without interpreter state (direct
+/// `execute` in unit tests) the static table is all there is.
+fn help_entries(ctx: &Context<'_>) -> Vec<HelpEntry> {
+    let Some(shell) = ctx.shell.as_ref() else {
+        return BUILTINS.iter().map(HelpEntry::from_table).collect();
+    };
+    shell
+        .builtin_names()
+        .into_iter()
+        .map(|name| {
+            let embedder = shell.is_embedder_builtin(&name);
+            match BUILTINS.iter().find(|info| info.name == name) {
+                Some(info) if !embedder => HelpEntry::from_table(info),
+                _ => HelpEntry {
+                    category: if embedder { "custom" } else { "other" },
+                    usage: name.clone(),
+                    description: shell
+                        .builtin_hint(&name)
+                        .unwrap_or("No description available")
+                        .to_string(),
+                    name,
+                },
+            }
+        })
+        .collect()
+}
 
 /// Builtin command metadata
 struct CmdInfo {
@@ -437,14 +495,15 @@ impl Builtin for Help {
             i += 1;
         }
 
+        let entries = help_entries(&ctx);
+
         // Specific command help
         if let Some(ref cmd) = command {
-            if let Some(info) = BUILTINS.iter().find(|b| b.name == cmd.as_str()) {
+            if let Some(info) = entries.iter().find(|b| b.name == cmd.as_str()) {
                 if json {
-                    return Ok(ExecResult::ok(format!(
-                        "{{\"name\":\"{}\",\"category\":\"{}\",\"usage\":\"{}\",\"description\":\"{}\"}}\n",
-                        info.name, info.category, info.usage, info.description
-                    )));
+                    let encoded = serde_json::to_string(info)
+                        .map_err(|e| crate::Error::Execution(format!("help: {e}")))?;
+                    return Ok(ExecResult::ok(format!("{encoded}\n")));
                 }
                 if short {
                     return Ok(ExecResult::ok(format!(
@@ -468,7 +527,7 @@ impl Builtin for Help {
         // Search mode
         if let Some(ref term) = search {
             let term_lower = term.to_lowercase();
-            let matches: Vec<&CmdInfo> = BUILTINS
+            let matches: Vec<&HelpEntry> = entries
                 .iter()
                 .filter(|b| {
                     b.name.contains(&term_lower)
@@ -493,7 +552,7 @@ impl Builtin for Help {
         // List mode or default: show categories
         if list {
             let mut output = String::new();
-            for info in BUILTINS {
+            for info in &entries {
                 if short {
                     output.push_str(&format!("{}\n", info.name));
                 } else {
@@ -505,7 +564,7 @@ impl Builtin for Help {
 
         // Default: show categories with counts
         let mut categories: Vec<(&str, usize)> = Vec::new();
-        for info in BUILTINS {
+        for info in &entries {
             if let Some(entry) = categories.iter_mut().find(|(c, _)| *c == info.category) {
                 entry.1 += 1;
             } else {
@@ -517,7 +576,7 @@ impl Builtin for Help {
         for (cat, count) in &categories {
             output.push_str(&format!("  {:16} ({count} commands)\n", cat));
         }
-        output.push_str(&format!("\nTotal: {} builtins\n", BUILTINS.len()));
+        output.push_str(&format!("\nTotal: {} builtins\n", entries.len()));
         output.push_str("Use 'help <command>' for details, 'help --list' to list all.\n");
 
         Ok(ExecResult::ok(output))

@@ -399,6 +399,9 @@ pub(crate) struct ShellRef<'a> {
     pub(crate) set_vars: &'a [String],
     /// Registered builtin commands (read-only, accessed via `has_builtin`).
     pub(crate) builtins: &'a HashMap<String, Arc<dyn Builtin>>,
+    /// Names the embedder registered with `BashBuilder::builtin`, which
+    /// replace any bundled builtin of the same name.
+    pub(crate) custom_builtin_names: &'a HashSet<String>,
     /// Host-owned builtin registry, when configured (read-only). Needed so
     /// introspection builtins (`compgen -b`) list host-registered commands
     /// alongside baked-in ones, matching `Bash::builtin_names()`.
@@ -606,6 +609,30 @@ impl ShellRef<'_> {
     /// registry) — same contract as [`crate::Bash::builtin_names`].
     pub(crate) fn builtin_names(&self) -> Vec<String> {
         merged_builtin_names(self.builtins, self.host_builtins)
+    }
+
+    /// Whether `name` runs an embedder's command (host registry or
+    /// `BashBuilder::builtin`) rather than one of bashkit's own.
+    pub(crate) fn is_embedder_builtin(&self, name: &str) -> bool {
+        self.custom_builtin_names.contains(name)
+            || self
+                .host_builtins
+                .is_some_and(|registry| registry.lookup(name).is_some())
+    }
+
+    /// `llm_hint` of the command `name` dispatches to, host registry first
+    /// as in dispatch. Nothing runs.
+    pub(crate) fn builtin_hint(&self, name: &str) -> Option<&'static str> {
+        match self
+            .host_builtins
+            .and_then(|registry| registry.lookup(name))
+        {
+            Some(builtin) => builtin.llm_hint(),
+            None => self
+                .builtins
+                .get(name)
+                .and_then(|builtin| builtin.llm_hint()),
+        }
     }
 
     /// Check if a name is a defined shell function.
@@ -9894,6 +9921,7 @@ impl Interpreter {
                 let fs = self.builtin_file_system(access, &execution_extensions);
                 let shell_ref = ShellRef {
                     builtins: &self.builtins,
+                    custom_builtin_names: &self.custom_builtin_names,
                     host_builtins: self.host_builtins.as_ref(),
                     functions: &self.scoped.functions,
                     aliases: Arc::make_mut(&mut self.scoped.aliases),
@@ -9984,6 +10012,7 @@ impl Interpreter {
             };
             let shell_ref = ShellRef {
                 builtins: &self.builtins,
+                custom_builtin_names: &self.custom_builtin_names,
                 host_builtins: self.host_builtins.as_ref(),
                 functions: &self.scoped.functions,
                 aliases: Arc::make_mut(&mut self.scoped.aliases),

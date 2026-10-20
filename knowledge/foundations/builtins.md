@@ -276,6 +276,12 @@ Internal builtins that need interpreter state receive it via `Context.shell`:
 
 **Builtins using ShellRef:**
 - `type`, `which`, read-only: check builtin/function/keyword names
+- `help`, read-only: lists `builtin_names()`, the same live inventory as
+  `compgen -c` without functions and aliases, host registry included. The
+  static table only describes; a command the embedder registered
+  (`is_embedder_builtin`) is described by its own `llm_hint`
+  (`builtin_hint`, host registry first as in dispatch), even when it replaces
+  a bundled name. `--json` output is serialized, so hints are escaped.
 - `alias`, `unalias`, direct mutation of `shell.aliases`
 - `trap`, direct mutation of `shell.traps`
 - `caller`, read call stack depth/frame names

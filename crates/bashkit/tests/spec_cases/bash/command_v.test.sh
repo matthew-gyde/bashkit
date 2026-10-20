@@ -60,3 +60,47 @@ command -V pathcmd
 ### expect
 pathcmd is /scripts/pathcmd
 ### end
+
+### command_V_every_operand
+# command -V describes every operand; status 0 when any was found
+command -V printf nonexistent_cmd_xyz_12345 echo 2>/dev/null
+echo "exit=$?"
+command -V nonexistent_cmd_xyz_12345 2>&1
+### expect
+printf is a shell builtin
+echo is a shell builtin
+exit=0
+bash: line 3: command: nonexistent_cmd_xyz_12345: not found
+### end
+
+### command_V_none_found
+# command -V fails only when no operand was found
+command -V nonexistent_cmd_xyz_12345 nonexistent_cmd_xyz_67890 2>/dev/null
+echo "exit=$?"
+### expect
+exit=1
+### end
+
+### command_combined_flags
+# -p, -v and -V combine like any getopt flags; the last of -v/-V wins
+command -pv printf
+command -vV printf
+command -Vv printf
+### expect
+printf
+printf is a shell builtin
+printf
+### end
+
+### command_invalid_option
+# An unknown flag is an invalid option, status 2
+command -Z printf 2>&1
+echo "exit=$?"
+command -vZ printf 2>/dev/null
+echo "exit=$?"
+### expect
+bash: line 1: command: -Z: invalid option
+command: usage: command [-pVv] command [arg ...]
+exit=2
+exit=2
+### end

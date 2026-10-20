@@ -175,7 +175,7 @@ Chrono's validated strftime implementation, plus GNU `%N`, `%3N`, `%6N`, and
 | `trap` | `COMMAND SIGNAL...`, `-p`, `-l` | Signal/event handlers |
 | `type` | `NAME...` | Describe command type |
 | `which` | `NAME...` | Locate a command |
-| `command` | `-v`, `NAME...` | Run or identify commands |
+| `command` | `-p`, `-v`, `-V` (combinable, `--`), `NAME...` | Run or identify commands; `-v`/`-V` describe every operand |
 | `hash` | (none) | No-op in sandboxed env |
 | `declare`/`typeset` | `-i`, `-r`, `-x`, `-a`, `-p`, `-n`, `-l`, `-u` | Variable attributes |
 | `let` | `EXPR...` | Evaluate arithmetic |

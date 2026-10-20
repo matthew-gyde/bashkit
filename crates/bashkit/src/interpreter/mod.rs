@@ -11979,33 +11979,39 @@ impl Interpreter {
         // Stays past the end when only flags were given (`command -v`).
         let mut cmd_args_start = args.len();
 
-        // Parse flags
-        let mut i = 0;
-        while i < args.len() {
-            let arg = &args[i];
-            if arg == "-v" {
-                mode = 'v';
-                i += 1;
-            } else if arg == "-V" {
-                mode = 'V';
-                i += 1;
-            } else if arg == "-p" {
-                // -p: use default PATH (ignore in sandboxed env)
-                i += 1;
-            } else if arg == "--" {
+        // Flags parse like bash's getopt: they combine (`-pv`), the last of
+        // `-v`/`-V` wins, `--` ends them, and any other flag is an invalid
+        // option (status 2). A bare `-` is the command name.
+        for (i, arg) in args.iter().enumerate() {
+            if arg == "--" {
                 cmd_args_start = i + 1;
                 break;
-            } else {
+            }
+            let Some(flags) = arg.strip_prefix('-').filter(|f| !f.is_empty()) else {
                 cmd_args_start = i;
                 break;
+            };
+            for flag in flags.chars() {
+                match flag {
+                    'v' | 'V' => mode = flag,
+                    // -p: use default PATH (ignore in sandboxed env)
+                    'p' => {}
+                    _ => {
+                        let result = ExecResult::err(
+                            self.diag(format!(
+                                "command: -{flag}: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n"
+                            )),
+                            2,
+                        );
+                        return self.redirect_result(result, redirects).await;
+                    }
+                }
             }
         }
 
         if cmd_args_start >= args.len() {
             return Ok(ExecResult::ok(String::new()));
         }
-
-        let cmd_name = &args[cmd_args_start];
 
         match mode {
             'v' => {
@@ -12037,41 +12043,22 @@ impl Interpreter {
                 Ok(result)
             }
             'V' => {
-                // command -V: verbose description
-                let registered = self.has_host_builtin(cmd_name)
-                    || is_dispatch_only_builtin(cmd_name)
-                    || self.builtins.contains_key(cmd_name.as_str());
-                let path =
-                    if registered && builtins::BASH_BUILTIN_NAMES.contains(&cmd_name.as_str()) {
-                        None
-                    } else {
-                        self.resolve_command_path(cmd_name).await
-                    };
-                let alias = self
-                    .is_expand_aliases_enabled()
-                    .then(|| self.scoped.aliases.get(cmd_name.as_str()))
-                    .flatten();
-                let description = if let Some(value) = alias {
-                    format!("{cmd_name} is aliased to `{value}'\n")
-                } else if let Some(f) = self.scoped.functions.get(cmd_name.as_str()) {
-                    format!(
-                        "{cmd_name} is a function\n{}\n",
-                        crate::parser::function_string(cmd_name, &f.body)
-                    )
-                } else if is_keyword(cmd_name) {
-                    format!("{} is a shell keyword\n", cmd_name)
-                } else if let Some(path) = path {
-                    format!("{} is {}\n", cmd_name, path)
-                } else if registered {
-                    format!("{} is a shell builtin\n", cmd_name)
-                } else {
-                    let result =
-                        ExecResult::err(self.diag(format!("command: {cmd_name}: not found\n")), 1);
-                    return self.apply_redirections(result, redirects).await;
-                };
-                let mut result = ExecResult::ok(description);
-                result = self.apply_redirections(result, redirects).await?;
-                Ok(result)
+                // command -V: describe each operand, reporting the missing
+                // ones on stderr; status 0 when any was found (bash).
+                let mut out = String::new();
+                let mut err = String::new();
+                for cmd_name in &args[cmd_args_start..] {
+                    match self.describe_command(cmd_name).await {
+                        Some(description) => out.push_str(&description),
+                        None => {
+                            err.push_str(&self.diag(format!("command: {cmd_name}: not found\n")))
+                        }
+                    }
+                }
+                let code = if out.is_empty() { 1 } else { 0 };
+                let mut result = ExecResult::with_code(out, code);
+                result.stderr = err.into();
+                self.apply_redirections(result, redirects).await
             }
             _ => {
                 // command name args...: run bypassing functions (use builtin only)
@@ -12151,6 +12138,37 @@ impl Interpreter {
                 );
                 self.redirect_result(result, redirects).await
             }
+        }
+    }
+
+    /// `command -V`'s description of one name, `None` when nothing by that
+    /// name can run.
+    async fn describe_command(&self, cmd_name: &str) -> Option<String> {
+        let registered = self.has_host_builtin(cmd_name)
+            || is_dispatch_only_builtin(cmd_name)
+            || self.builtins.contains_key(cmd_name);
+        let path = if registered && builtins::BASH_BUILTIN_NAMES.contains(&cmd_name) {
+            None
+        } else {
+            self.resolve_command_path(cmd_name).await
+        };
+        let alias = self
+            .is_expand_aliases_enabled()
+            .then(|| self.scoped.aliases.get(cmd_name))
+            .flatten();
+        if let Some(value) = alias {
+            Some(format!("{cmd_name} is aliased to `{value}'\n"))
+        } else if let Some(f) = self.scoped.functions.get(cmd_name) {
+            Some(format!(
+                "{cmd_name} is a function\n{}\n",
+                crate::parser::function_string(cmd_name, &f.body)
+            ))
+        } else if is_keyword(cmd_name) {
+            Some(format!("{cmd_name} is a shell keyword\n"))
+        } else if let Some(path) = path {
+            Some(format!("{cmd_name} is {path}\n"))
+        } else {
+            registered.then(|| format!("{cmd_name} is a shell builtin\n"))
         }
     }
 

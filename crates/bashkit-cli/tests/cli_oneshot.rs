@@ -142,7 +142,7 @@ fn function_recursion_is_bounded_on_a_two_mib_stack() {
         let out = run_with_two_mib_stack(script);
         assert_eq!(out.status.code(), Some(1), "{script}: {}", stderr(&out));
         assert!(
-            stderr(&out).contains("maximum function depth exceeded"),
+            stderr(&out).contains("maximum function nesting level exceeded (16)"),
             "{script}: {}",
             stderr(&out)
         );

@@ -3065,12 +3065,16 @@ pub(crate) mod resource_exhaustion {
             )
             .await;
 
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        // The overrun abandons the command line (bash's FUNCNEST behavior).
+        let result = result.unwrap();
+        assert_eq!(result.stdout, "depth\n".repeat(5));
+        assert_eq!(result.exit_code, 1);
         assert!(
-            err.contains("function") && err.contains("exceeded"),
+            result
+                .stderr
+                .contains("maximum function nesting level exceeded (5)"),
             "Expected function depth error, got: {}",
-            err
+            result.stderr
         );
     }
 

@@ -5326,16 +5326,20 @@ fn
         let limits = ExecutionLimits::new().max_function_depth(3);
         let mut bash = Bash::builder().limits(limits).build();
 
-        // Recursive function that would go 5 deep
+        // Recursive function that would go 5 deep: the fourth call abandons
+        // the line (bash's FUNCNEST behavior), keeping the output so far.
         let result = bash
             .exec("f() { echo $1; if [ $1 -lt 5 ]; then f $(($1 + 1)); fi; }; f 1")
-            .await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+            .await
+            .unwrap();
+        assert_eq!(result.stdout, "1\n2\n3\n");
+        assert_eq!(result.exit_code, 1);
         assert!(
-            err.to_string().contains("maximum function depth exceeded"),
+            result
+                .stderr
+                .contains("f: maximum function nesting level exceeded (3)"),
             "Expected function depth error, got: {}",
-            err
+            result.stderr
         );
     }
 

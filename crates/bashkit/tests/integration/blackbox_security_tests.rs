@@ -158,8 +158,19 @@ mod finding_source_recursion_stack_overflow {
         let _ = bash
             .exec("echo 'source /tmp/recurse.sh' > /tmp/recurse.sh")
             .await;
-        let result = bash.exec("source /tmp/recurse.sh").await;
-        assert!(result.is_err(), "Self-sourcing must hit recursion limit");
+        // The overrun abandons the line (bash's DISCARD) with status 1.
+        let result = bash.exec("source /tmp/recurse.sh").await.unwrap();
+        assert_eq!(
+            result.exit_code, 1,
+            "Self-sourcing must hit recursion limit"
+        );
+        assert!(
+            result
+                .stderr
+                .contains("/tmp/recurse.sh: maximum source nesting level exceeded (5)"),
+            "{}",
+            result.stderr
+        );
     }
 
     /// TM-DOS-056: mutual recursion via source also hits depth limit.
@@ -172,10 +183,17 @@ mod finding_source_recursion_stack_overflow {
         let _ = bash
             .exec("echo 'source /tmp/recurse_a.sh' > /tmp/recurse_b.sh")
             .await;
-        let result = bash.exec("source /tmp/recurse_a.sh").await;
-        assert!(
-            result.is_err(),
+        let result = bash.exec("source /tmp/recurse_a.sh").await.unwrap();
+        assert_eq!(
+            result.exit_code, 1,
             "Mutual source recursion must hit depth limit"
+        );
+        assert!(
+            result
+                .stderr
+                .contains("maximum source nesting level exceeded (5)"),
+            "{}",
+            result.stderr
         );
     }
 }
@@ -926,8 +944,18 @@ mod resource_exhaustion_passing {
     #[tokio::test]
     async fn mutual_recursion_depth_limit() {
         let mut bash = dos_bash();
-        let result = bash.exec("ping() { pong; }\npong() { ping; }\nping").await;
-        assert!(result.is_err(), "Mutual recursion must hit depth limit");
+        let result = bash
+            .exec("ping() { pong; }\npong() { ping; }\nping")
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1, "Mutual recursion must hit depth limit");
+        assert!(
+            result
+                .stderr
+                .contains("maximum function nesting level exceeded (5)"),
+            "{}",
+            result.stderr
+        );
     }
 
     /// Fork bomb pattern caught by limits
@@ -937,7 +965,10 @@ mod resource_exhaustion_passing {
         let result = bash.exec(r#":(){ :|:& };:"#).await;
         match &result {
             Ok(r) => assert!(
-                r.exit_code != 0 || r.stderr.contains("limit") || r.stderr.contains("error"),
+                r.exit_code != 0
+                    || r.stderr.contains("limit")
+                    || r.stderr.contains("error")
+                    || r.stderr.contains("nesting level exceeded"),
                 "Fork bomb pattern should be blocked"
             ),
             Err(_) => {}

@@ -10988,6 +10988,29 @@ impl Interpreter {
             Err(e) => return Err(e),
         };
 
+        // THREAT[TM-DOS-056]: Check source depth (uses function depth limit)
+        // before any caller state changes. Past it, `source` abandons the
+        // current command line like bash's DISCARD.
+        if let Err(depth_error) = self.counters.push_function(&self.limits) {
+            // THREAT[TM-DOS-020]: a depth trip inside a trap handler must
+            // still fail the execution instead of silently stopping the
+            // recursion (the `source` status mapping below would hide it).
+            if self.in_trap {
+                self.note_trap_depth_error(depth_error);
+                return Err(crate::error::Error::Execution(format!(
+                    "source: {}: maximum source depth exceeded",
+                    filename
+                )));
+            }
+            let limit = match depth_error {
+                LimitExceeded::MaxFunctionDepth(limit) => limit,
+                other => return Err(other.into()),
+            };
+            return Err(crate::error::Error::LineAbort(self.diag(format!(
+                "{filename}: maximum source nesting level exceeded ({limit})\n"
+            ))));
+        }
+
         // Set positional parameters if extra arguments provided.
         // Save and restore the caller's positional params.
         let source_args: Vec<String> = args[1..].to_vec();
@@ -11013,20 +11036,6 @@ impl Interpreter {
         } else {
             None
         };
-
-        // THREAT[TM-DOS-056]: Check source depth (uses function depth limit)
-        if let Err(depth_error) = self.counters.push_function(&self.limits) {
-            // THREAT[TM-DOS-020]: a depth trip inside a trap handler must
-            // still fail the execution instead of silently stopping the
-            // recursion (the `source` status mapping below would hide it).
-            if self.in_trap {
-                self.note_trap_depth_error(depth_error);
-            }
-            return Err(crate::error::Error::Execution(format!(
-                "source: {}: maximum source depth exceeded",
-                filename
-            )));
-        }
 
         // Track source file for BASH_SOURCE
         self.bash_source_stack.push(SourceFrame {
@@ -11278,6 +11287,24 @@ impl Interpreter {
         }
     }
 
+    /// The function nesting level `FUNCNEST` sets: a number above 0, else
+    /// none (bash ignores other values).
+    fn funcnest(&self) -> Option<usize> {
+        self.lookup_regular_variable_ref("FUNCNEST")?
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|&limit| limit > 0)
+    }
+
+    /// Shell functions running now, the count bash compares with `FUNCNEST`.
+    fn function_nesting(&self) -> usize {
+        self.call_stack
+            .iter()
+            .filter(|frame| frame.is_function)
+            .count()
+    }
+
     async fn execute_function_call(
         &mut self,
         name: &str,
@@ -11286,8 +11313,28 @@ impl Interpreter {
         stdin: Option<crate::StreamData>,
         redirects: &[Redirect],
     ) -> Result<ExecResult> {
-        // Check function depth limit
-        self.counters.push_function(&self.limits)?;
+        // bash's FUNCNEST, then the shared depth limit (TM-DOS-020). Past
+        // either, the call abandons the current command line like bash's
+        // DISCARD: output so far is kept, a script resumes at its next line,
+        // and a subshell, `$(...)`, `source` or `eval` ends with status 1.
+        if let Some(limit) = self.funcnest()
+            && self.function_nesting() >= limit
+        {
+            return Err(crate::error::Error::LineAbort(self.diag(format!(
+                "{name}: maximum function nesting level exceeded ({limit})\n"
+            ))));
+        }
+        match self.counters.push_function(&self.limits) {
+            Ok(()) => {}
+            // In a trap handler the trip still fails the execution
+            // (signal recursion, TM-DOS-020).
+            Err(LimitExceeded::MaxFunctionDepth(limit)) if !self.in_trap => {
+                return Err(crate::error::Error::LineAbort(self.diag(format!(
+                    "{name}: maximum function nesting level exceeded ({limit})\n"
+                ))));
+            }
+            Err(limit) => return Err(limit.into()),
+        }
 
         // `v=x f`: the prefix assignments form a scope just below the frame.
         let tempenv_pushed = self.push_pending_tempenv(true);

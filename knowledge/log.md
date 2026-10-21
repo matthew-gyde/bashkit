@@ -1,5 +1,9 @@
 # Bashkit Knowledge Update Log
 
+## 2026-10-21
+
+* **Nesting overruns end like FUNCNEST**: a function or `source` call past the depth limit failed the whole `exec` with a resource-limit error, so the output the script had already produced was lost and nothing in the script could react. It now abandons the current command line the way bash's `FUNCNEST` overrun does (status 1, `NAME: maximum function nesting level exceeded (N)` on stderr), keeps earlier output and resumes at the next line; inside a trap handler the trip still fails the exec. `FUNCNEST` itself is honored, which lets the spec cases compare the behavior with real bash. See [Threat Model](security/threat-model.md).
+
 ## 2026-10-20
 
 * **help lists the live inventory**: `help` read only its static table, so commands registered with `BashBuilder::builtin` or the host registry were unknown to it, and `--json` was built with `format!` and broke on a quote. It now lists `Bash::builtin_names()`, describes an embedder's command by its `llm_hint`, and serializes JSON. See [Builtin Commands](foundations/builtins.md).

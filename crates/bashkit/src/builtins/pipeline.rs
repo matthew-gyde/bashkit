@@ -4,7 +4,7 @@ use super::clap_cache::cached_command;
 use async_trait::async_trait;
 
 use super::{Builtin, Context, ExecutionPlan, SubCommand, resolve_path};
-use crate::error::Result;
+use crate::error::{Result, io_error_reason};
 use crate::interpreter::ExecResult;
 
 /// The xargs builtin - build and execute command lines from stdin.
@@ -784,19 +784,35 @@ impl Builtin for Tee {
         // UTF-8 (a Latin-1 CSV, a binary blob) to U+FFFD.
         let input = ctx.stdin_bytes().unwrap_or_default();
 
+        // Like GNU tee, a file it cannot write is reported and skipped: the
+        // input still reaches stdout and the other files, and the status is 1.
+        let mut stderr = String::new();
         for file in &files {
             // tee(1): "If a FILE is -, it refers to a file named - ."
             // The codegen output documents the same in `after_help`.
             let path = resolve_path(ctx.cwd, file);
 
-            if append {
-                ctx.fs.append_file(&path, input).await?;
+            let written = if append {
+                ctx.fs.append_file(&path, input).await
             } else {
-                ctx.fs.write_file(&path, input).await?;
+                ctx.fs.write_file(&path, input).await
+            };
+            match written {
+                Ok(()) => {}
+                // A filesystem error is the file's; budget and other limits
+                // still end the execution.
+                Err(error @ crate::Error::Io(_)) => {
+                    stderr.push_str(&format!("tee: {file}: {}\n", io_error_reason(&error)));
+                }
+                Err(error) => return Err(error),
             }
         }
 
-        Ok(ExecResult::ok_bytes(input.to_vec()))
+        // Bytes out as they came in: invalid UTF-8 passes through unchanged.
+        let status = if stderr.is_empty() { 0 } else { 1 };
+        let mut result = ExecResult::with_code(input.to_vec(), status);
+        result.stderr = stderr.into();
+        Ok(result)
     }
 }
 

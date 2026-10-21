@@ -67,3 +67,16 @@ cat /tmp/tee_i.txt
 ### expect
 ok
 ### end
+
+### tee_reports_a_file_it_cannot_write_and_keeps_going
+# GNU tee: the input still reaches stdout and the other files; status 1.
+mkdir -p /tmp/tee_dir
+echo "kept" | tee /tmp/tee_dir /tmp/tee_after.txt; echo "status $?"
+cat /tmp/tee_after.txt
+m=$( { echo x | tee /tmp/tee_dir >/dev/null; } 2>&1 ); echo "$m"
+### expect
+kept
+status 1
+kept
+tee: /tmp/tee_dir: Is a directory
+### end

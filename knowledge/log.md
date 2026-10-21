@@ -2,6 +2,8 @@
 
 ## 2026-10-21
 
+* **Embedders can raise the depth ceiling**: `max_function_depth` was capped at 16 for every embedder, sized for a 2 MiB host stack. `ExecutionLimits::function_depth_ceiling` (default 16) is now that cap, so an embedder that runs Bashkit on a larger stack it has measured can allow deeper legitimate recursion; `max_function_depth` alone still cannot pass it. See [Threat Model](security/threat-model.md).
+
 * **Nesting overruns end like FUNCNEST**: a function or `source` call past the depth limit failed the whole `exec` with a resource-limit error, so the output the script had already produced was lost and nothing in the script could react. It now abandons the current command line the way bash's `FUNCNEST` overrun does (status 1, `NAME: maximum function nesting level exceeded (N)` on stderr), keeps earlier output and resumes at the next line; inside a trap handler the trip still fails the exec. `FUNCNEST` itself is honored, which lets the spec cases compare the behavior with real bash. See [Threat Model](security/threat-model.md).
 
 ## 2026-10-20

@@ -107,7 +107,8 @@ executions receive fresh state. Regression and Bash differential coverage:
 
 Self-sent signals run handlers inline. Every handler entered through
 `run_trap_command` charges the existing function-depth counter, also used by
-functions, source, and child shells; its hard ceiling is 16. A dedicated
+functions, source, and child shells; its ceiling is 16 unless an embedder
+that sized its stack raises `function_depth_ceiling`. A dedicated
 trap-nesting cap of 3 trips first on small stacks: exactly three nested
 handler executions are admitted, and the fourth entry is skipped with a
 diagnostic on the handler stderr. This preserves finite nested signal

@@ -115,3 +115,50 @@ async fn funcnest_above_the_limit_cannot_raise_it() {
         "f: maximum function nesting level exceeded (4)\n"
     );
 }
+
+/// An embedder that runs Bashkit on a larger stack can raise the depth
+/// ceiling past its default of 16.
+#[test]
+fn raised_ceiling_admits_deeper_recursion_on_a_larger_stack() {
+    let run = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut bash = Bash::builder()
+                    .limits(
+                        ExecutionLimits::new()
+                            .max_function_depth(40)
+                            .function_depth_ceiling(40),
+                    )
+                    .build();
+                bash.exec(
+                    "g() { if [ $1 -gt 1 ]; then g $(($1 - 1)); else echo bottom; fi; }\ng 40\nf() { f; }\nf",
+                )
+                .await
+                .unwrap()
+            })
+    };
+    let result = std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(run)
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(result.stdout, "bottom\n");
+    assert_eq!(
+        result.stderr,
+        "bash: line 3: f: maximum function nesting level exceeded (40)\n"
+    );
+}
+
+#[tokio::test]
+async fn max_function_depth_alone_cannot_pass_the_default_ceiling() {
+    let mut bash = shell(100);
+    let result = bash.exec("f() { f; }\nf").await.unwrap();
+    assert_eq!(
+        result.stderr,
+        "bash: line 1: f: maximum function nesting level exceeded (16)\n"
+    );
+}

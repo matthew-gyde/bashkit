@@ -32,9 +32,10 @@ use std::time::Duration;
 use crate::time_compat::Instant;
 
 // THREAT[TM-DOS-020]: 100 nested interpreter frames overflow a 2 MiB host
-// stack before the configurable counter fires. Keep a hard ceiling even when
-// embedders request a higher logical recursion limit.
-const HARD_MAX_FUNCTION_DEPTH: usize = 16;
+// stack before the configurable counter fires. Keep a ceiling even when
+// embedders request a higher logical recursion limit; only an embedder that
+// sized its own stack raises it (`function_depth_ceiling`).
+const DEFAULT_FUNCTION_DEPTH_CEILING: usize = 16;
 
 // Self-delivered trap handlers re-enter the interpreter synchronously, so a
 // small dedicated nesting cap trips before native frames can exhaust small
@@ -82,8 +83,18 @@ pub struct ExecutionLimits {
     pub max_total_loop_iterations: usize,
 
     /// Maximum shared function, source, child-shell, and trap-handler depth
-    /// Default: 16; values above 16 are capped for host stack safety.
+    /// Default: 16; values above `function_depth_ceiling` are capped for host
+    /// stack safety.
     pub max_function_depth: usize,
+
+    // THREAT[TM-DOS-020]: each nesting level holds interpreter frames on the
+    // host stack, so the ceiling must fit the stack Bashkit runs on.
+    /// Ceiling on `max_function_depth`, sized to the host stack.
+    /// Default: 16, which a 2 MiB host stack holds. Raise it only for a
+    /// thread whose stack is measured to hold that many nested frames (in the
+    /// build that ships): past what the stack holds, deep recursion aborts
+    /// the process instead of failing the call.
+    pub function_depth_ceiling: usize,
 
     /// Execution timeout
     /// Default: 30 seconds
@@ -183,7 +194,8 @@ impl Default for ExecutionLimits {
             max_commands: 10_000,
             max_loop_iterations: 10_000,
             max_total_loop_iterations: 1_000_000,
-            max_function_depth: HARD_MAX_FUNCTION_DEPTH,
+            max_function_depth: DEFAULT_FUNCTION_DEPTH_CEILING,
+            function_depth_ceiling: DEFAULT_FUNCTION_DEPTH_CEILING,
             timeout: Duration::from_secs(30),
             parser_timeout: Duration::from_secs(5),
             max_input_bytes: 10_000_000, // 10MB
@@ -282,6 +294,14 @@ impl ExecutionLimits {
     /// A value of 0 prevents entry into any of these execution frames.
     pub fn max_function_depth(mut self, depth: usize) -> Self {
         self.max_function_depth = depth;
+        self
+    }
+
+    /// Set the ceiling on `max_function_depth` (default 16). Only for an
+    /// embedder that runs Bashkit on a stack measured to hold `depth` nested
+    /// frames; see [`ExecutionLimits::function_depth_ceiling`].
+    pub fn function_depth_ceiling(mut self, depth: usize) -> Self {
+        self.function_depth_ceiling = depth;
         self
     }
 
@@ -653,7 +673,7 @@ impl ExecutionCounters {
         });
 
         // Check before incrementing so we don't leave invalid state on failure
-        let max_depth = limits.max_function_depth.min(HARD_MAX_FUNCTION_DEPTH);
+        let max_depth = limits.max_function_depth.min(limits.function_depth_ceiling);
         if self.function_depth >= max_depth {
             return Err(LimitExceeded::MaxFunctionDepth(max_depth));
         }
@@ -1703,7 +1723,11 @@ mod tests {
         assert_eq!(limits.max_commands, 10_000);
         assert_eq!(limits.max_loop_iterations, 10_000);
         assert_eq!(limits.max_total_loop_iterations, 1_000_000);
-        assert_eq!(limits.max_function_depth, HARD_MAX_FUNCTION_DEPTH);
+        assert_eq!(limits.max_function_depth, DEFAULT_FUNCTION_DEPTH_CEILING);
+        assert_eq!(
+            limits.function_depth_ceiling,
+            DEFAULT_FUNCTION_DEPTH_CEILING
+        );
         assert_eq!(limits.timeout, Duration::from_secs(30));
         assert_eq!(limits.parser_timeout, Duration::from_secs(5));
         assert_eq!(limits.max_input_bytes, 10_000_000);
@@ -1853,13 +1877,48 @@ mod tests {
     fn function_depth_has_a_hard_stack_safety_ceiling() {
         let limits = ExecutionLimits::new().max_function_depth(1_000);
         let mut counters = ExecutionCounters::new();
-        for _ in 0..HARD_MAX_FUNCTION_DEPTH {
+        for _ in 0..DEFAULT_FUNCTION_DEPTH_CEILING {
             assert!(counters.push_function(&limits).is_ok());
         }
         assert!(matches!(
             counters.push_function(&limits),
-            Err(LimitExceeded::MaxFunctionDepth(HARD_MAX_FUNCTION_DEPTH))
+            Err(LimitExceeded::MaxFunctionDepth(
+                DEFAULT_FUNCTION_DEPTH_CEILING
+            ))
         ));
+    }
+
+    #[test]
+    fn function_depth_ceiling_can_be_raised_and_still_caps() {
+        let raised = ExecutionLimits::new()
+            .max_function_depth(100)
+            .function_depth_ceiling(100);
+        let mut counters = ExecutionCounters::new();
+        for _ in 0..100 {
+            assert!(counters.push_function(&raised).is_ok());
+        }
+        assert!(matches!(
+            counters.push_function(&raised),
+            Err(LimitExceeded::MaxFunctionDepth(100))
+        ));
+
+        // The lower of the two always wins.
+        let capped = ExecutionLimits::new()
+            .max_function_depth(1_000)
+            .function_depth_ceiling(40);
+        let lower = ExecutionLimits::new()
+            .max_function_depth(5)
+            .function_depth_ceiling(40);
+        for (limits, depth) in [(capped, 40), (lower, 5)] {
+            let mut counters = ExecutionCounters::new();
+            for _ in 0..depth {
+                assert!(counters.push_function(&limits).is_ok());
+            }
+            assert!(matches!(
+                counters.push_function(&limits),
+                Err(LimitExceeded::MaxFunctionDepth(d)) if d == depth
+            ));
+        }
     }
 
     #[test]

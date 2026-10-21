@@ -265,6 +265,24 @@ impl Interpreter {
         self.diag(format!("{path}: {reason}\n"))
     }
 
+    /// Fail the command (status 1) for an output redirect that could not be
+    /// opened, reporting through fd 2 as the command's earlier redirects left
+    /// it: bash opens redirects left to right, so `2>/dev/null >/bad` reports
+    /// nothing while `>/bad 2>/dev/null` reports on the shell's stderr.
+    async fn fail_redirect(&self, result: &mut ExecResult, message: String, fd2: &FdTarget) {
+        result.exit_code = 1;
+        result.stderr = crate::StreamData::new();
+        match fd2 {
+            FdTarget::DevNull | FdTarget::Closed => {}
+            // Best effort, like the stream it would have carried.
+            FdTarget::WriteFile(path, _) | FdTarget::AppendFile(path, _) => {
+                let _ = self.fs.append_file(path, message.as_bytes()).await;
+            }
+            FdTarget::Stdout => result.stdout.append(&crate::StreamData::from(message)),
+            FdTarget::Stderr | FdTarget::Coproc(_) => result.stderr = message.into(),
+        }
+    }
+
     /// Admit a backend read before loading and retain its capacity through decoding.
     // THREAT[TM-DOS-103]: metadata and device ceilings precede VFS allocation.
     async fn read_input_stream(
@@ -653,6 +671,8 @@ impl Interpreter {
         }
 
         // --- Fast path: no mixed dup+file redirects ---
+        // Where fd 2 points so far: a later redirect that fails reports there.
+        let mut fd2 = FdTarget::Stderr;
         for redirect in redirects {
             match redirect.kind {
                 RedirectKind::Output | RedirectKind::Clobber => {
@@ -666,7 +686,10 @@ impl Interpreter {
                             .await?;
                     } else if is_dev_null(&path) {
                         match redirect.fd {
-                            Some(2) => result.stderr = crate::StreamData::new(),
+                            Some(2) => {
+                                result.stderr = crate::StreamData::new();
+                                fd2 = FdTarget::DevNull;
+                            }
                             _ => result.stdout = crate::StreamData::new(),
                         }
                     } else {
@@ -675,10 +698,9 @@ impl Interpreter {
                             && self.fs.stat(&path).await.is_ok_and(clobber_protected)
                         {
                             result.stdout = crate::StreamData::new();
-                            result.stderr = self
-                                .redirect_error(&target_path, "cannot overwrite existing file")
-                                .into();
-                            result.exit_code = 1;
+                            let message =
+                                self.redirect_error(&target_path, "cannot overwrite existing file");
+                            self.fail_redirect(&mut result, message, &fd2).await;
                             return Ok(result);
                         }
                         match redirect.fd {
@@ -686,23 +708,22 @@ impl Interpreter {
                                 if let Err(e) =
                                     self.fs.write_file(&path, result.stderr.as_bytes()).await
                                 {
-                                    result.stderr = self
-                                        .redirect_error(&target_path, &io_error_reason(&e))
-                                        .into();
-                                    result.exit_code = 1;
+                                    let message =
+                                        self.redirect_error(&target_path, &io_error_reason(&e));
+                                    self.fail_redirect(&mut result, message, &fd2).await;
                                     return Ok(result);
                                 }
                                 result.stderr = crate::StreamData::new();
+                                fd2 = FdTarget::WriteFile(path, target_path);
                             }
                             _ => {
                                 if let Err(e) =
                                     self.fs.write_file(&path, result.stdout.as_bytes()).await
                                 {
                                     result.stdout = crate::StreamData::new();
-                                    result.stderr = self
-                                        .redirect_error(&target_path, &io_error_reason(&e))
-                                        .into();
-                                    result.exit_code = 1;
+                                    let message =
+                                        self.redirect_error(&target_path, &io_error_reason(&e));
+                                    self.fail_redirect(&mut result, message, &fd2).await;
                                     return Ok(result);
                                 }
                                 result.stdout = crate::StreamData::new();
@@ -724,7 +745,10 @@ impl Interpreter {
                             .await?;
                     } else if is_dev_null(&path) {
                         match redirect.fd {
-                            Some(2) => result.stderr = crate::StreamData::new(),
+                            Some(2) => {
+                                result.stderr = crate::StreamData::new();
+                                fd2 = FdTarget::DevNull;
+                            }
                             _ => result.stdout = crate::StreamData::new(),
                         }
                     } else {
@@ -733,23 +757,22 @@ impl Interpreter {
                                 if let Err(e) =
                                     self.fs.append_file(&path, result.stderr.as_bytes()).await
                                 {
-                                    result.stderr = self
-                                        .redirect_error(&target_path, &io_error_reason(&e))
-                                        .into();
-                                    result.exit_code = 1;
+                                    let message =
+                                        self.redirect_error(&target_path, &io_error_reason(&e));
+                                    self.fail_redirect(&mut result, message, &fd2).await;
                                     return Ok(result);
                                 }
                                 result.stderr = crate::StreamData::new();
+                                fd2 = FdTarget::AppendFile(path, target_path);
                             }
                             _ => {
                                 if let Err(e) =
                                     self.fs.append_file(&path, result.stdout.as_bytes()).await
                                 {
                                     result.stdout = crate::StreamData::new();
-                                    result.stderr = self
-                                        .redirect_error(&target_path, &io_error_reason(&e))
-                                        .into();
-                                    result.exit_code = 1;
+                                    let message =
+                                        self.redirect_error(&target_path, &io_error_reason(&e));
+                                    self.fail_redirect(&mut result, message, &fd2).await;
                                     return Ok(result);
                                 }
                                 result.stdout = crate::StreamData::new();
@@ -988,6 +1011,9 @@ impl Interpreter {
         let mut fd1 = FdTarget::Stdout;
         let mut fd2 = FdTarget::Stderr;
         self.pending_fd_targets.clear();
+        // Where fd 2 pointed as each file was opened: a file that cannot be
+        // written reports there (redirects open left to right).
+        let mut fd2_at_open: HashMap<PathBuf, FdTarget> = HashMap::new();
 
         for redirect in redirects {
             match redirect.kind {
@@ -1009,10 +1035,9 @@ impl Interpreter {
                         && self.fs.stat(&path).await.is_ok_and(clobber_protected)
                     {
                         result.stdout = crate::StreamData::new();
-                        result.stderr = self
-                            .redirect_error(&target_path, "cannot overwrite existing file")
-                            .into();
-                        result.exit_code = 1;
+                        let message =
+                            self.redirect_error(&target_path, "cannot overwrite existing file");
+                        self.fail_redirect(&mut result, message, &fd2).await;
                         self.clear_pending_fd_redirect_state();
                         return Ok(result);
                     }
@@ -1020,6 +1045,9 @@ impl Interpreter {
                     let target = if is_dev_null(&path) {
                         FdTarget::DevNull
                     } else {
+                        fd2_at_open
+                            .entry(path.clone())
+                            .or_insert_with(|| fd2.clone());
                         FdTarget::WriteFile(path, target_path)
                     };
                     match redirect.fd {
@@ -1043,6 +1071,9 @@ impl Interpreter {
                     let target = if is_dev_null(&path) {
                         FdTarget::DevNull
                     } else {
+                        fd2_at_open
+                            .entry(path.clone())
+                            .or_insert_with(|| fd2.clone());
                         FdTarget::AppendFile(path, target_path)
                     };
                     match redirect.fd {
@@ -1129,7 +1160,7 @@ impl Interpreter {
             orig_stderr = report;
             result.exit_code = 1;
         }
-        let (new_stdout, mut new_stderr, file_writes) = route_fd_table_content(
+        let (new_stdout, new_stderr, file_writes) = route_fd_table_content(
             &orig_stdout,
             &orig_stderr,
             &fd1,
@@ -1156,12 +1187,10 @@ impl Interpreter {
                 self.fs.write_file(path, content.as_bytes()).await
             };
             if let Err(e) = write_result {
-                new_stderr = self
-                    .redirect_error(display_path, &io_error_reason(&e))
-                    .into();
-                result.exit_code = 1;
+                let message = self.redirect_error(display_path, &io_error_reason(&e));
+                let fd2 = fd2_at_open.remove(path).unwrap_or(FdTarget::Stderr);
                 result.stdout = new_stdout;
-                result.stderr = new_stderr;
+                self.fail_redirect(&mut result, message, &fd2).await;
                 return Ok(result);
             }
         }

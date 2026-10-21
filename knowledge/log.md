@@ -2,6 +2,8 @@
 
 ## 2026-10-21
 
+* **Failed redirects report in redirect order**: an output redirect that could not be opened always put its error on the shell's stderr, so `cmd 2>/dev/null >/bad` printed it and `cmd 2>err >/bad` left `err` empty, where bash, which opens redirects left to right, sends it through fd 2 as the earlier redirects left it. The error now goes there (nowhere, the earlier file, or stdout after `2>&1`). An embedder's refused write is the same failed redirection, so a script can silence or handle it. See [Limitations](operations/limitations.md).
+
 * **Embedders can raise the depth ceiling**: `max_function_depth` was capped at 16 for every embedder, sized for a 2 MiB host stack. `ExecutionLimits::function_depth_ceiling` (default 16) is now that cap, so an embedder that runs Bashkit on a larger stack it has measured can allow deeper legitimate recursion; `max_function_depth` alone still cannot pass it. See [Threat Model](security/threat-model.md).
 
 * **Nesting overruns end like FUNCNEST**: a function or `source` call past the depth limit failed the whole `exec` with a resource-limit error, so the output the script had already produced was lost and nothing in the script could react. It now abandons the current command line the way bash's `FUNCNEST` overrun does (status 1, `NAME: maximum function nesting level exceeded (N)` on stderr), keeps earlier output and resumes at the next line; inside a trap handler the trip still fails the exec. `FUNCNEST` itself is honored, which lets the spec cases compare the behavior with real bash. See [Threat Model](security/threat-model.md).

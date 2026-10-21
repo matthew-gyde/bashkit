@@ -172,7 +172,10 @@ Errors follow bash: `division by 0`, `syntax error`, `bad array subscript`,
 In `$((...))` or an arithmetic subscript the error aborts the rest of the
 current line (`ControlFlow::Abort` / `Error::LineAbort`): at the top level the
 shell continues with the next line, inside a function or subshell the whole
-compound stops, status 1. `((...))` and `let` just return status 1.
+compound stops, status 1. `((...))` and `let` just return status 1. A
+function or `source` call past `FUNCNEST` or the shared depth limit takes the
+same path (bash's `FUNCNEST` overrun), except inside a trap handler, where the
+trip still fails the exec (TM-DOS-020).
 
 ### Error Recovery
 

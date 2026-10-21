@@ -47,3 +47,20 @@ async fn refusal_after_the_stderr_redirect_still_reports() {
     assert_eq!(result.stdout, "handled\n");
     assert!(result.stderr.contains("/etc/passwd: "), "{}", result.stderr);
 }
+
+#[tokio::test]
+async fn tee_reports_a_refused_file_and_keeps_going() {
+    // A refused write inside `tee` failed the whole exec before.
+    let mut bash = read_only_shell();
+    let result = bash
+        .exec("echo x | tee /etc/t; echo \"status $?\"")
+        .await
+        .unwrap();
+    assert_eq!(result.stdout, "x\nstatus 1\n");
+    assert!(
+        result.stderr.starts_with("tee: /etc/t: "),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.exit_code, 0);
+}

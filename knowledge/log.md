@@ -2,6 +2,8 @@
 
 ## 2026-10-21
 
+* **tee keeps going past a file it cannot write**: a write error on one of `tee`'s files (a directory, a refused write) failed the whole exec, so earlier output was lost and the script could not react. Like GNU tee, it now reports `tee: FILE: reason`, still copies its input to stdout and the other files, and exits 1. See [Builtin Commands](foundations/builtins.md).
+
 * **Failed redirects report in redirect order**: an output redirect that could not be opened always put its error on the shell's stderr, so `cmd 2>/dev/null >/bad` printed it and `cmd 2>err >/bad` left `err` empty, where bash, which opens redirects left to right, sends it through fd 2 as the earlier redirects left it. The error now goes there (nowhere, the earlier file, or stdout after `2>&1`). An embedder's refused write is the same failed redirection, so a script can silence or handle it. See [Limitations](operations/limitations.md).
 
 * **Embedders can raise the depth ceiling**: `max_function_depth` was capped at 16 for every embedder, sized for a 2 MiB host stack. `ExecutionLimits::function_depth_ceiling` (default 16) is now that cap, so an embedder that runs Bashkit on a larger stack it has measured can allow deeper legitimate recursion; `max_function_depth` alone still cannot pass it. See [Threat Model](security/threat-model.md).
